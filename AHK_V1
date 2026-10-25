@@ -1,0 +1,2249 @@
+#NoEnv
+#SingleInstance Force
+SendMode Input
+SetWorkingDir %A_ScriptDir%
+SetBatchLines, 10ms
+FileEncoding, UTF-8
+SetTitleMatchMode, 2
+
+ScriptVersion := "5.2.7"
+UpdateURL    := "https://raw.githubusercontent.com/ВАШ_НИК/ВАШ_РЕПОЗИТОРИЙ/main/version.txt"
+ScriptURL    := "https://raw.githubusercontent.com/ВАШ_НИК/ВАШ_РЕПОЗИТОРИЙ/main/CPD.ahk"
+
+DataFolder   := A_ScriptDir . "\CPD_Data"
+ShotFolder   := DataFolder . "\Screenshots"
+BackupFolder := DataFolder . "\Backups"
+ProfileFile  := DataFolder . "\DontDeleteCPD.txt"
+SettingsFile := DataFolder . "\settings.ini"
+LogFile      := DataFolder . "\CPD_Action_Log.txt"
+ArrestsFile  := DataFolder . "\Аресты.txt"
+FinesLogFile := DataFolder . "\Штрафы.txt"
+FinesFile    := DataFolder . "\fines.ini"
+PhrasesFile  := DataFolder . "\phrases.txt"
+CodesFile    := DataFolder . "\codes.ini"
+
+if !FileExist(DataFolder)
+    FileCreateDir, %DataFolder%
+if !FileExist(ShotFolder)
+    FileCreateDir, %ShotFolder%
+if !FileExist(BackupFolder)
+    FileCreateDir, %BackupFolder%
+
+IniRead, ChatOpenDelay, %SettingsFile%, General, ChatOpenDelay, 250
+IniRead, ChatSendDelay, %SettingsFile%, General, ChatSendDelay, 250
+IniRead, ThemeName,     %SettingsFile%, General, Theme, Темная
+IniRead, TransLevel,    %SettingsFile%, General, TransLevel, 150
+IniRead, DiscordWebhook,%SettingsFile%, General, DiscordWebhook, %A_Space%
+
+if (ChatOpenDelay = "" || ChatOpenDelay < 100)
+    ChatOpenDelay := 250
+if (ChatSendDelay = "" || ChatSendDelay < 100)
+    ChatSendDelay := 250
+if (TransLevel = "")
+    TransLevel := 150
+
+; --- НОВЫЕ ВЕБХУКИ ---
+IniRead, WebhookSearch,   %SettingsFile%, Webhooks, Search, %A_Space%
+IniRead, WebhookDNA,      %SettingsFile%, Webhooks, DNA, %A_Space%
+IniRead, WebhookFinger,   %SettingsFile%, Webhooks, Fingerprint, %A_Space%
+IniRead, WebhookPhoto,    %SettingsFile%, Webhooks, Photorobot, %A_Space%
+IniRead, WebhookWanted,   %SettingsFile%, Webhooks, Wanted, %A_Space%
+IniRead, WebhookRaid,     %SettingsFile%, Webhooks, Raid, %A_Space%
+
+Global ChatOpenDelay, ChatSendDelay, ThemeName, TransLevel, DiscordWebhook
+Global WebhookSearch, WebhookDNA, WebhookFinger, WebhookPhoto, WebhookWanted, WebhookRaid
+
+IniRead, HkID,         %SettingsFile%, Hotkeys, ID,         !4
+IniRead, HkMiranda,    %SettingsFile%, Hotkeys, Miranda,    !5
+IniRead, HkSearch,     %SettingsFile%, Hotkeys, Search,     !6
+IniRead, HkPhoto,      %SettingsFile%, Hotkeys, Photo,      !7
+IniRead, HkArrest,     %SettingsFile%, Hotkeys, Arrest,     !8
+IniRead, HkFineP,      %SettingsFile%, Hotkeys, FineP,      !sc018
+IniRead, HkFineC,      %SettingsFile%, Hotkeys, FineC,      !sc019
+IniRead, HkDNA,        %SettingsFile%, Hotkeys, DNA,        !sc020
+IniRead, HkMega,       %SettingsFile%, Hotkeys, Mega,       ^1
+IniRead, HkGlass,      %SettingsFile%, Hotkeys, Glass,      ^2
+IniRead, HkPutCar,     %SettingsFile%, Hotkeys, PutCar,     ^3
+IniRead, HkOutCar,     %SettingsFile%, Hotkeys, OutCar,     ^4
+IniRead, HkHandcuffOn, %SettingsFile%, Hotkeys, HandcuffOn, !9
+IniRead, HkHandcuffOff,%SettingsFile%, Hotkeys, HandcuffOff,!0
+IniRead, HkPerimeter,  %SettingsFile%, Hotkeys, Perimeter,  ^0
+IniRead, HkSeize,      %SettingsFile%, Hotkeys, Seize,      ^sc00C
+
+; --- НОВЫЕ ХОТКЕИ ---
+IniRead, HkFinger,     %SettingsFile%, Hotkeys, Fingerprint, !f
+IniRead, HkWanted,     %SettingsFile%, Hotkeys, Wanted,      !w
+IniRead, HkRaid,       %SettingsFile%, Hotkeys, Raid,        !r
+
+HkListKeys := "HkID,HkMiranda,HkSearch,HkPhoto,HkArrest,HkFineP,HkFineC,HkDNA,HkMega,HkGlass,HkPutCar,HkOutCar,HkHandcuffOn,HkHandcuffOff,HkPerimeter,HkSeize,HkFinger,HkWanted,HkRaid"
+Loop, Parse, HkListKeys, `,
+{
+    v := %A_LoopField%
+    v := Trim(v)
+    %A_LoopField% := v
+}
+
+Global HkID, HkMiranda, HkSearch, HkPhoto, HkArrest, HkFineP, HkFineC, HkDNA
+Global HkMega, HkGlass, HkPutCar, HkOutCar, HkHandcuffOn, HkHandcuffOff
+Global HkPerimeter, HkSeize, HkFinger, HkWanted, HkRaid
+
+if (ThemeName = "Светлая") {
+    BG := "0xEEEEEE", TxtC := "cBlack", HiC := "cBlue", TabC := "cBlack", BorderC := "0xAAAAAA"
+} else {
+    BG := "0x1A1A1A", TxtC := "cWhite", HiC := "cYellow", TabC := "cWhite", BorderC := "0x555555"
+}
+
+Global HkNames, HkOrder, FineMap, Codes
+HkNames := {"HkID":"Удостоверение","HkMiranda":"Миранда","HkSearch":"Обыск","HkPhoto":"Фото","HkArrest":"Арест","HkFineP":"Штраф гражд.","HkFineC":"Штраф авто","HkDNA":"Сбор ДНК","HkMega":"Мегафон","HkGlass":"Стекло","HkPutCar":"В авто","HkOutCar":"Из авто","HkHandcuffOn":"Наручники+","HkHandcuffOff":"Наручники-","HkPerimeter":"Оцепление","HkSeize":"Изъять","HkFinger":"Отпечатки","HkWanted":"Розыск","HkRaid":"Рейд"}
+HkOrder := ["HkID","HkMiranda","HkSearch","HkPhoto","HkArrest","HkFineP","HkFineC","HkDNA","HkMega","HkGlass","HkPutCar","HkOutCar","HkHandcuffOn","HkHandcuffOff","HkPerimeter","HkSeize","HkFinger","HkWanted","HkRaid"]
+FineMap := {}
+Codes   := {}
+
+HotkeysPaused := false
+PendingAction := ""
+TargetName    := ""
+TargetMark    := ""
+SuspectName   := ""
+
+GetHumanKey(k) {
+    if (k = "")
+        return ""
+    k := Trim(k)
+    out := ""
+    Loop {
+        ch := SubStr(k, 1, 1)
+        if (ch = "!") {
+            out .= "Alt+",  k := SubStr(k, 2)
+        } else if (ch = "^") {
+            out .= "Ctrl+", k := SubStr(k, 2)
+        } else if (ch = "+" && !InStr(k, "sc0")) {
+            out .= "Shift+", k := SubStr(k, 2)
+        } else if (ch = "#") {
+            out .= "Win+",  k := SubStr(k, 2)
+        } else break
+    }
+    if RegExMatch(k, "i)^sc([0-9a-f]+)$", m) {
+        vk := DllCall("MapVirtualKey", "UInt", "0x" . m1, "UInt", 3)
+        if (vk)
+            k := GetKeyName("vk" . Format("{:X}", vk))
+    }
+    return out . k
+}
+
+IsReservedKey(k) {
+    if (k = "")
+        return false
+    k := StrReplace(k, "~")
+    StringUpper, kU, k
+    return (kU = "F8" || kU = "F9" || kU = "F10")
+}
+
+IsGameActive() {
+    global HotkeysPaused
+    if (HotkeysPaused)
+        return 0
+    If WinActive("Управление CPD") || WinActive("Действие") || WinActive("Данные задержанного") || WinActive("Штраф") || WinActive("Быстрые фразы") || WinActive("Инструкция") || WinActive("Введите информацию") || WinActive("База арестов") || WinActive("Статистика") || WinActive("Шаблоны фраз") || WinActive("Быстрый скриптер") || WinActive("Арест")
+        return 0
+    If WinActive("ahk_exe javaw.exe")
+        || WinActive("ahk_exe Minecraft.exe")
+        || WinActive("ahk_exe Minecraft.Windows.exe")
+        || WinActive("ahk_exe RADMIR.exe")
+        || WinActive("ahk_exe RAGEMP.exe")
+        || WinActive("ahk_exe RAGE-MP.exe")
+        || WinActive("ahk_exe FiveM.exe")
+        || WinActive("ahk_exe FiveM_b2189.exe")
+        || WinActive("ahk_exe GTA5.exe")
+        || WinActive("ahk_exe PlayGTAV.exe")
+        return 1
+    return 0
+}
+
+ActivateGame() {
+    If WinExist("ahk_exe RAGEMP.exe")
+        WinActivate, ahk_exe RAGEMP.exe
+    else If WinExist("ahk_exe GTA5.exe")
+        WinActivate, ahk_exe GTA5.exe
+    else If WinExist("ahk_exe RADMIR.exe")
+        WinActivate, ahk_exe RADMIR.exe
+    else If WinExist("ahk_exe RAGE-MP.exe")
+        WinActivate, ahk_exe RAGE-MP.exe
+    else If WinExist("ahk_exe FiveM.exe")
+        WinActivate, ahk_exe FiveM.exe
+    else If WinExist("ahk_exe javaw.exe")
+        WinActivate, ahk_exe javaw.exe
+    else If WinExist("ahk_exe Minecraft.exe")
+        WinActivate, ahk_exe Minecraft.exe
+}
+
+RequireProfile() {
+    global ProfileFile
+    if (!FileExist(ProfileFile)) {
+        ShowTip("Сначала заполните профиль (F10)")
+        return false
+    }
+    return true
+}
+
+RP(m, f) {
+    global Pol
+    return (Pol = "Мужской") ? m : f
+}
+
+LogAction(action) {
+    global LogFile, DiscordWebhook
+    FormatTime, timestamp,, dd.MM.yyyy HH:mm:ss
+    FileAppend, [%timestamp%] %action%`n, %LogFile%
+    if (Trim(DiscordWebhook) != "")
+        SendDiscord("[CPD] " . action)
+}
+
+ShowTip(txt, ms := 1500) {
+    ToolTip, %txt%
+    SetTimer, ClearTip, -%ms%
+}
+
+SendChat(text) {
+    global ChatOpenDelay, ChatSendDelay
+    if (!IsGameActive())
+        return false
+    SendLevel, 1
+    SendInput, {t}
+    SendLevel, 0
+    Sleep, %ChatOpenDelay%
+    if (!IsGameActive()) {
+        SendInput, {Esc}
+        return false
+    }
+    SendRaw, %text%
+    Sleep, 50
+    SendLevel, 1
+    SendInput, {ENTER}
+    SendLevel, 0
+    Sleep, %ChatSendDelay%
+    return true
+}
+
+OnMessage(0x0201, "WM_LBUTTONDOWN")
+WM_LBUTTONDOWN() {
+    MouseGetPos,,, win, ctrl
+    If (win = WinExist("Управление CPD") && ctrl = "")
+        PostMessage, 0xA1, 2,,, ahk_id %win%
+}
+
+CheckUpdates() {
+    global UpdateURL, ScriptVersion, ScriptURL, DataFolder
+    if InStr(UpdateURL, "ВАШ_") || UpdateURL = ""
+        return
+    if !InStr(UpdateURL, "http")
+        return
+    try {
+        whr := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        whr.SetTimeouts(3000, 3000, 3000, 3000)
+        whr.Open("GET", UpdateURL, false)
+        whr.Send()
+        if (whr.Status = 200) {
+            LatestVer := Trim(whr.ResponseText)
+            if (LatestVer != "" && LatestVer != ScriptVersion && InStr(LatestVer, "404") = 0) {
+                MsgBox, 36, Обновление, Доступна новая версия АХК (%LatestVer%)!`nВаша версия: %ScriptVersion%`n`nСкачать?
+                IfMsgBox, Yes
+                    Run, %ScriptURL%
+            }
+        }
+    } catch {
+    }
+}
+
+SanitizeJSON(str) {
+    str := StrReplace(str, "\", "\\")
+    str := StrReplace(str, """", "\""")
+    str := StrReplace(str, "`n", "\n")
+    str := StrReplace(str, "`r", "")
+    str := StrReplace(str, "`t", "\t")
+    return str
+}
+
+StrToUTF8(str) {
+    stream := ComObjCreate("ADODB.Stream")
+    stream.Type := 2
+    stream.Charset := "utf-8"
+    stream.Open()
+    stream.WriteText(str)
+    stream.Position := 0
+    stream.Type := 1
+    stream.Position := 0
+    
+    if (stream.Size >= 3) {
+        stream.Read(3)
+    }
+    return stream.Read()
+}
+
+SendDiscord(content) {
+    global DiscordWebhook
+    if (Trim(DiscordWebhook) = "")
+        return
+    try {
+        safeContent := SanitizeJSON(content)
+        body := "{""content"":""" . safeContent . """}"
+        whr := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        whr.SetTimeouts(3000, 3000, 3000, 3000)
+        whr.Open("POST", DiscordWebhook, false)
+        whr.SetRequestHeader("Content-Type", "application/json")
+        whr.Send(body)
+    }
+}
+
+SendDiscordMedia(webhookUrl, title, content, filePath) {
+    if (Trim(webhookUrl) = "" || !FileExist(filePath))
+        return false
+
+    safeTitle := SanitizeJSON(title)
+    safeContent := SanitizeJSON(content)
+    json := "{""content"": ""**" . safeTitle . "**\n" . safeContent . """}"
+
+    boundary := "AHK_BOUNDARY_" . A_TickCount
+
+    stream := ComObjCreate("ADODB.Stream")
+    stream.Type := 1
+    stream.Open()
+
+    jsonPart := "--" . boundary . "`r`n"
+    jsonPart .= "Content-Disposition: form-data; name=""payload_json""`r`n"
+    jsonPart .= "Content-Type: application/json`r`n`r`n"
+    jsonPart .= json . "`r`n"
+    stream.Write(StrToUTF8(jsonPart))
+
+    filePart := "--" . boundary . "`r`n"
+    filePart .= "Content-Disposition: form-data; name=""file""; filename=""image.png""`r`n"
+    filePart .= "Content-Type: image/png`r`n`r`n"
+    stream.Write(StrToUTF8(filePart))
+
+    fileStream := ComObjCreate("ADODB.Stream")
+    fileStream.Type := 1
+    fileStream.Open()
+    try {
+        fileStream.LoadFromFile(filePath)
+        stream.Write(fileStream.Read())
+    } catch {
+        fileStream.Close()
+        stream.Close()
+        return false
+    }
+    fileStream.Close()
+
+    tail := "`r`n--" . boundary . "--`r`n"
+    stream.Write(StrToUTF8(tail))
+
+    stream.Position := 0
+    postData := stream.Read()
+    stream.Close()
+
+    try {
+        whr := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        whr.SetTimeouts(5000, 5000, 5000, 5000)
+        whr.Open("POST", webhookUrl, false)
+        whr.SetRequestHeader("Content-Type", "multipart/form-data; boundary=" . boundary)
+        whr.Send(postData)
+
+        if (whr.Status >= 200 && whr.Status < 300) {
+            return true
+        } else {
+            errCode := whr.Status
+            ; Убрали блокирующий MsgBox
+            ShowTip("Ошибка Discord: " . errCode, 3000)
+            return false
+        }
+    } catch e {
+        ShowTip("Ошибка отправки: " . e.Message, 3000)
+        return false
+    }
+}
+
+ProcessActionWithWebhook(actionType, targetName) {
+    global Name, ShotFolder, WebhookSearch, WebhookDNA, WebhookFinger, WebhookPhoto, WebhookWanted, WebhookRaid
+    if (!IsGameActive())
+        return
+        
+    webhookURL := ""
+    title := ""
+    content := ""
+    
+    if (actionType = "Search") {
+        webhookURL := WebhookSearch
+        title := "обыск"
+        content := "1 ник | " . targetName . " (РП нейм чела)`n2 ник | " . Name . " (РП нейм кто обыскивал)`n3 скрин (НЕ ОБРЕЗАННЫЙ)"
+    } else if (actionType = "DNA") {
+        webhookURL := WebhookDNA
+        title := "днк"
+        content := "1 ник | " . targetName . " (РП нейм чела)`n2 ник | " . Name . " (РП нейм кто снимал ДНК)`n3 скрин (НЕ ОБРЕЗАННЫЙ)"
+    } else if (actionType = "Fingerprint") {
+        webhookURL := WebhookFinger
+        title := "отпечатки-пальцев"
+        content := "1 ник | " . targetName . " (РП нейм чела)`n2 ник | " . Name . " (РП нейм кто снимал отпечатки пальцев)`n3 скрин (НЕ ОБРЕЗАННЫЙ)"
+    } else if (actionType = "Photorobot") {
+        webhookURL := WebhookPhoto
+        title := "фоторобот"
+        content := "1 ник | " . targetName . " (РП нейм чела)`n2 ник | " . Name . " (РП нейм кто фотографировал)`n3 скрин (НЕ ОБРЕЗАННЫЙ)"
+    } else if (actionType = "Wanted") {
+        webhookURL := WebhookWanted
+        title := "розыск"
+        content := "1 ник | " . targetName . " (РП нейм чела)`n2 ник | " . Name . " (РП нейм кто выдал розыск)`n3 скрин (НЕ ОБРЕЗАННЫЙ)"
+    } else if (actionType = "Raid") {
+        webhookURL := WebhookRaid
+        title := "рейды"
+        content := "1 ники | " . targetName . " (РП неймы кто участвовал на рейде)`n2 ник | " . Name . " (РП нейм кто проводил)`n3 скрин начала (НЕ ОБРЕЗАННЫЙ)"
+    }
+    
+    if (webhookURL != "" && webhookURL != A_Space && InStr(webhookURL, "http")) {
+        ShowTip("Отправка в Discord (" . title . ")...")
+        FormatTime, ts,, dd.MM.yyyy_HH-mm-ss
+        ShotPath := ShotFolder . "\" . actionType . "_" . ts . ".png"
+        Gdip_SaveScreenWithWatermark(ShotPath, "CPD | " . Name . " | " . ts)
+        SendDiscordMedia(webhookURL, title, content, ShotPath)
+    }
+}
+
+BackupProfile() {
+    global ProfileFile, SettingsFile, FinesFile, CodesFile, BackupFolder
+    if !FileExist(ProfileFile)
+        return
+    FormatTime, ts,, yyyyMMdd_HHmmss
+    FileCopy, %ProfileFile%,  %BackupFolder%\profile_%ts%.bak,  1
+    if FileExist(SettingsFile)
+        FileCopy, %SettingsFile%, %BackupFolder%\settings_%ts%.bak, 1
+    if FileExist(FinesFile)
+        FileCopy, %FinesFile%,    %BackupFolder%\fines_%ts%.bak,    1
+    if FileExist(CodesFile)
+        FileCopy, %CodesFile%,    %BackupFolder%\codes_%ts%.bak,    1
+    EnvAdd, cutoff, -30, Days
+    FormatTime, cutoffStr, %cutoff%, yyyyMMdd
+    Loop, Files, %BackupFolder%\*.bak
+    {
+        name := A_LoopFileName
+        if RegExMatch(name, "_(\d{8})_", m) {
+            if (m1 < cutoffStr)
+                FileDelete, %A_LoopFileFullPath%
+        }
+    }
+}
+
+LoadFines() {
+    global FinesFile, FineMap
+    if !FileExist(FinesFile) {
+        FileAppend, `; Название=Сумма`nПревышение скорости=5000`nЕзда без прав=15000`nНеповиновение сотруднику=10000`nПарковка в неположенном месте=3000`n, %FinesFile%
+    }
+    FineMap := {}
+    list := ""
+    Loop, Read, %FinesFile%
+    {
+        line := Trim(A_LoopReadLine)
+        if (line = "" || SubStr(line, 1, 1) = ";")
+            continue
+        pos := InStr(line, "=")
+        if !pos
+            continue
+        name := Trim(SubStr(line, 1, pos - 1))
+        sum  := Trim(SubStr(line, pos + 1))
+        if (name = "")
+            continue
+        FineMap[name] := sum
+        list .= name . "|"
+    }
+    return RTrim(list, "|")
+}
+
+CreateDefaultCodes() {
+    global CodesFile
+    if FileExist(CodesFile)
+        return
+    body =
+    (
+[Административный]
+1.1=Нарушение общественного порядка — беспричинные крики, создание помех гражданам, нахождение в обнажённом виде и иные действия, нарушающие спокойствие|1000
+1.2=Драка в общественном месте при отсутствии состава преступления (за каждого участника)|2000
+1.3=Нахождение в состоянии алкогольного или наркотического опьянения в общественном месте|2000
+1.4=Оскорбление должностного лица при исполнении служебных обязанностей|5000
+1.4.2=Оскорбление, совершённое должностным лицом либо государственным сотрудником|10000
+1.5=Игнорирование правонарушения должностным лицом при исполнении обязанностей|10000
+1.6=Ложный вызов социальных или силовых структур|5000
+2.2=Движение по встречной полосе без законных оснований; исключение: объезд препятствия, движение спецслужб|1000
+2.3=Движение пешехода по проезжей части при наличии пешеходной зоны|500
+2.4=Переход дороги в неположенном месте|500
+2.5=Парковка в неположенном месте, в том числе блокирование проезда|5000
+
+[Уголовный]
+5.1=[Гл.5] Убийство — умышленное причинение смерти другому лицу (2 года)
+5.2=[Гл.5] Убийство двух и более лиц (3 года)
+5.3=[Гл.5] Причинение смерти по неосторожности (1 год)
+5.4=[Гл.5] Нанесение тяжких телесных повреждений (1 год)
+5.5=[Гл.5] Вооружённое нападение, не связанное с хищением имущества (2 года)
+5.6=[Гл.5] Угроза убийством либо причинением тяжкого вреда здоровью при демонстрации оружия либо действиях, свидетельствующих о реальном намерении причинить вред (1 год)
+6.1=[Гл.6] Похищение человека — незаконное лишение свободы путём захвата и удержания лица (от 2 до 4 лет)
+7.1=[Гл.7] Изнасилование (5 лет)
+7.2=[Гл.7] Изнасилование с причинением особо тяжкого вреда человеку или смерти (5 лет)
+7.3=[Гл.7] Домогательство (3 года)
+8.1=[Гл.8] Мошенничество — хищение чужого имущества путём обмана или злоупотребления доверием (1 год)
+8.2=[Гл.8] Кража — тайное хищение чужого имущества (1 год)
+8.3=[Гл.8] Грабёж — открытое хищение чужого имущества (2 года)
+8.4=[Гл.8] Разбой — нападение в целях хищения чужого имущества с применением насилия либо оружия (3 года)
+8.5=[Гл.8] Вандализм — умышленное повреждение, уничтожение либо осквернение чужого имущества без цели хищения (1 год + возмещение ущерба)
+9.1=[Гл.9] Терроризм — поджог, взрыв либо иные общественно опасные действия, повлёкшие гибель людей (5 лет)
+9.2=[Гл.9] Вербовка либо иные действия, направленные на вовлечение лица в террористическую деятельность (2 года)
+9.3=[Гл.9] Захват или удержание лица в качестве заложника (3 года)
+9.4=[Гл.9] Организация или руководство массовыми беспорядками, сопровождающимися насилием (4 года)
+9.5=[Гл.9] Незаконное приобретение, передача, сбыт, хранение, транспортировка, изготовление или ношение оружия, боеприпасов (2 года)
+9.6=[Гл.9] Хищение оружия, боеприпасов, специальных средств или взрывчатых веществ (2 года)
+9.6.1=[Гл.9] Те же действия, совершённые государственным сотрудником с использованием служебного положения (3 года)
+9.7=[Гл.9] Незаконное проникновение на особо охраняемую территорию (2 года)
+9.7.1=[Гл.9] Незаконное проникновение на частную собственность (1 год)
+9.8=[Гл.9] Публичные призывы к террористической деятельности, её оправдание либо угроза совершения террористического акта (4 года)
+9.9=[Гл.9] Демонстрация, ношение в открытом виде либо приведение в боевую готовность оружия в общественном месте (1 год)
+9.10=[Гл.9] Создание помех работе экстренных служб (2 года)
+10.1=[Гл.10] Незаконное выращивание наркотических средств (2 года)
+10.2=[Гл.10] Незаконное хранение наркотических средств (от 1 до 2 лет)
+10.2.1=[Гл.10] Хранение наркотических средств в особо крупном размере приравнивается к распространению (3 года)
+10.3=[Гл.10] Незаконное употребление наркотических средств (1 год)
+10.4=[Гл.10] Незаконная продажа либо распространение наркотических средств (3 года + конфискация)
+11.1=[Гл.11] Посягательство на жизнь государственного сотрудника либо представителя органов власти (3 года)
+11.2=[Гл.11] Насильственный захват власти либо насильственное удержание власти в штате (5 лет)
+11.3=[Гл.11] Разглашение государственной тайны (4 года)
+11.4=[Гл.11] Организация вооружённого митинга либо иных действий, направленных на свержение или неподчинение законной власти штата (4 года)
+12.1=[Гл.12] Превышение должностных полномочий (2 года)
+12.1.1=[Гл.12] Злоупотребление должностными полномочиями (1 год)
+12.2=[Гл.12] Умышленное невыполнение государственным сотрудником законного приказа начальника (1 год)
+12.3=[Гл.12] Получение взятки должностным лицом (3 года + увольнение)
+12.3.1=[Гл.12] Вымогательство взятки должностным лицом (4 года + увольнение)
+12.4=[Гл.12] Дача взятки должностному лицу (2 года)
+12.5=[Гл.12] Халатность (2 года + увольнение)
+12.6=[Гл.12] Неповиновение законному требованию сотрудника правоохранительных органов (1 год)
+12.7=[Гл.12] Сопротивление при задержании сотрудниками правоохранительных органов (1 год)
+12.7.1=[Гл.12] Вооружённое сопротивление либо сопротивление, сопряжённое с применением насилия (3 года)
+12.8=[Гл.12] Самовольное осуществление функций правоохранительных органов либо применение мер принуждения (2 года)
+13.1=[Гл.13] Вмешательство в осуществление правосудия либо предварительного следствия (2 года)
+13.1.1=[Гл.13] Незаконное вмешательство в процесс задержания (2 года)
+13.3=[Гл.13] Привлечение заведомо невиновного лица к уголовной либо административной ответственности (1 год)
+13.4=[Гл.13] Заведомо незаконное задержание либо заключение под стражу (3 года)
+13.5=[Гл.13] Дача заведомо ложных показаний (2 года)
+13.6=[Гл.13] Подкуп свидетеля с целью получения выгоды либо искажения правосудия (2 года)
+13.7=[Гл.13] Неисполнение судебного приговора, вступившего в законную силу (3 года)
+13.8=[Гл.13] Сокрытие либо уничтожение доказательств (улик) (1 год)
+13.9=[Гл.13] Умышленное уклонение от следствия, задержания либо суда (1 год)
+14.1=[Гл.14] Применение насилия, не опасного для жизни или здоровья (1 год)
+14.2=[Гл.14] Подделка, изготовление либо сбыт поддельных документов (2 года)
+14.3=[Гл.14] Укрывательство преступника (2 года)
+14.4=[Гл.14] Незаконное использование формы, знаков различия либо атрибутики государственных органов (1 год)
+15.1=[Гл.15] Неисполнение приказа, отданного начальником в уставном порядке (1 год)
+15.2=[Гл.15] Самовольное оставление части или места службы (1 год)
+15.3=[Гл.15] Дезертирство (2 года)
+16.1=[Гл.16] Вымогательство (шантаж) (3 года)
+16.2=[Гл.16] Умышленное уничтожение либо существенное повреждение чужого имущества (2 года + возмещение ущерба)
+16.3=[Гл.16] Уничтожение либо повреждение чужого имущества по неосторожности (1 год + возмещение ущерба)
+16.4=[Гл.16] Незаконное завладение транспортным средством без цели хищения (угон) (2 года)
+17.1=[Гл.17] Незаконный сбор, хранение либо распространение сведений о частной жизни лица (2 года)
+17.1.1=[Гл.17] Те же деяния, совершённые лицом с использованием служебного положения (3 года)
+17.2.1=[Гл.17] Осуществление фото-, видео- или аудиозаписи лица без его согласия (2 года)
+17.2.2=[Гл.17] Распространение, передача либо использование материалов, полученных в результате незаконной съёмки (3 года)
+17.2.3=[Гл.17] Те же деяния, совершённые с использованием служебного положения либо с целью извлечения выгоды (4 года)
+18.1=[Гл.18] Вмешательство в проведение выборов Губернатора, подкуп участников голосования (2 года)
+18.2=[Гл.18] Незаконная агитация в период официального проведения голосования (1 год)
+18.4=[Гл.18] Фальсификация результатов голосования (3 года)
+19.1=[Гл.19] Клевета — распространение заведомо ложных сведений (2 года)
+19.1.1=[Гл.19] Те же деяния, совершённые лицом с использованием служебного положения (3 года)
+19.2=[Гл.19] Заведомо ложное сообщение о совершении лицом преступления (2 года)
+20.1=[Гл.20] Дискриминация (3 года)
+20.1.1=[Гл.20] Те же деяния, совершённые лицом с использованием служебного положения (4 года)
+21.1=[Гл.21] Организация подпольного казино (5 лет)
+21.2=[Гл.21] Участие в деятельности подпольного казино (4 года)
+    )
+    FileAppend, %body%, %CodesFile%
+}
+
+LoadCodes() {
+    global CodesFile
+    codes := {}
+    codes["Уголовный"] := []
+    codes["Административный"] := []
+    if !FileExist(CodesFile)
+        return codes
+    section := ""
+    Loop, Read, %CodesFile%
+    {
+        line := Trim(A_LoopReadLine)
+        if (line = "" || SubStr(line, 1, 1) = ";")
+            continue
+        if (SubStr(line, 1, 1) = "[" && SubStr(line, 0, 1) = "]") {
+            section := Trim(SubStr(line, 2, StrLen(line) - 2))
+            if !codes.HasKey(section)
+                codes[section] := []
+            continue
+        }
+        if (section = "")
+            continue
+        pos := InStr(line, "=")
+        if (!pos)
+            continue
+        num  := Trim(SubStr(line, 1, pos - 1))
+        rest := Trim(SubStr(line, pos + 1))
+        pos2 := InStr(rest, "|")
+        if (pos2) {
+            artName := Trim(SubStr(rest, 1, pos2 - 1))
+            val     := Trim(SubStr(rest, pos2 + 1))
+        } else {
+            artName := rest
+            val     := "0"
+        }
+        if (num = "" || artName = "")
+            continue
+        codes[section].Push({num: num, name: artName, extra: val})
+    }
+    return codes
+}
+
+LoadPhrases() {
+    global PhrasesFile
+    if !FileExist(PhrasesFile) {
+        FileAppend, Стоять! Полиция!`nРуки за голову!`nПрижмитесь к обочине!`nПокиньте транспортное средство!`nВы задержаны!`n, %PhrasesFile%
+    }
+}
+
+SetupHotkeys() {
+    global HkID, HkMiranda, HkSearch, HkPhoto, HkArrest, HkFineP, HkFineC, HkDNA
+    global HkMega, HkGlass, HkPutCar, HkOutCar, HkHandcuffOn, HkHandcuffOff
+    global HkPerimeter, HkSeize, HkFinger, HkWanted, HkRaid
+    RegisterHk(HkID, "DoID")
+    RegisterHk(HkMiranda, "DoMiranda")
+    RegisterHk(HkSearch, "DoSearchGUI")
+    RegisterHk(HkPhoto, "DoPhotoGUI")
+    RegisterHk(HkArrest, "DoArrest")
+    RegisterHk(HkFineP, "DoFineMenu")
+    RegisterHk(HkFineC, "DoFineCar")
+    RegisterHk(HkDNA, "DoDNA")
+    RegisterHk(HkMega, "DoMega")
+    RegisterHk(HkGlass, "DoGlass")
+    RegisterHk(HkPutCar, "DoPutCar")
+    RegisterHk(HkOutCar, "DoOutCar")
+    RegisterHk(HkHandcuffOn, "DoHandcuffOn")
+    RegisterHk(HkHandcuffOff, "DoHandcuffOff")
+    RegisterHk(HkPerimeter, "DoPerimeter")
+    RegisterHk(HkSeize, "DoSeize")
+    RegisterHk(HkFinger, "DoFingerprintGUI")
+    RegisterHk(HkWanted, "DoWantedGUI")
+    RegisterHk(HkRaid, "DoRaidGUI")
+}
+
+RegisterHk(key, label) {
+    if (key = "")
+        return
+    if (IsReservedKey(key)) {
+        ShowTip(key . " — системная, пропуск", 3000)
+        return
+    }
+    Hotkey, %key%, %label%, UseErrorLevel
+    if (ErrorLevel)
+        ShowTip("Хоткей " . GetHumanKey(key) . " занят", 2500)
+}
+
+Global StatArrests, StatFines, StatID, StatMiranda, StatFinesSum, StatTotal
+
+LoadStats() {
+    global LogFile, StatArrests, StatFines, StatID, StatMiranda, StatFinesSum, StatTotal
+    StatArrests := 0, StatFines := 0, StatID := 0, StatMiranda := 0
+    StatFinesSum := 0, StatTotal := 0
+    if !FileExist(LogFile)
+        return
+    FormatTime, today,, dd.MM.yyyy
+    prefix := "[" . today
+    Loop, Read, %LogFile%
+    {
+        line := A_LoopReadLine
+        if (SubStr(line, 1, StrLen(prefix)) != prefix)
+            continue
+        StatTotal++
+        if InStr(line, "Арест")
+            StatArrests++
+        else if InStr(line, "Штраф") {
+            StatFines++
+            if RegExMatch(line, "\((\d+)\)", m)
+                StatFinesSum += m1
+        }
+        else if InStr(line, "удостоверение")
+            StatID++
+        else if InStr(line, "Миранды")
+            StatMiranda++
+    }
+}
+
+Gdip_Startup() {
+    if !DllCall("GetModuleHandle", "str", "gdiplus", "Ptr")
+        DllCall("LoadLibrary", "str", "gdiplus", "Ptr")
+    VarSetCapacity(si, A_PtrSize = 8 ? 24 : 16, 0)
+    NumPut(1, si, 0, "UInt")
+    DllCall("gdiplus\GdiplusStartup", "Ptr*", pToken, "Ptr", &si, "Ptr", 0)
+    return pToken
+}
+Gdip_Shutdown(pToken) {
+    DllCall("gdiplus\GdiplusShutdown", "Ptr", pToken)
+    if hModule := DllCall("GetModuleHandle", "str", "gdiplus", "Ptr")
+        DllCall("FreeLibrary", "Ptr", hModule)
+}
+Gdip_BitmapFromScreen(Screen=0) {
+    if (Screen = 0) {
+        SysGet, x, 76
+        SysGet, y, 77
+        SysGet, w, 78
+        SysGet, h, 79
+    } else {
+        StringSplit, S, Screen, |
+        x := S1, y := S2, w := S3, h := S4
+    }
+    hdc := DllCall("GetDC", "Ptr", 0, "Ptr")
+    hdcMem := DllCall("CreateCompatibleDC", "Ptr", hdc, "Ptr")
+    hbm := DllCall("CreateCompatibleBitmap", "Ptr", hdc, "Int", w, "Int", h, "Ptr")
+    obm := DllCall("SelectObject", "Ptr", hdcMem, "Ptr", hbm, "Ptr")
+    DllCall("BitBlt", "Ptr", hdcMem, "Int", 0, "Int", 0, "Int", w, "Int", h, "Ptr", hdc, "Int", x, "Int", y, "UInt", 0x00CC0020)
+    DllCall("SelectObject", "Ptr", hdcMem, "Ptr", obm)
+    DllCall("DeleteDC", "Ptr", hdcMem)
+    DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "Ptr", hbm, "Ptr", 0, "Ptr*", pBitmap)
+    DllCall("DeleteObject", "Ptr", hbm)
+    return pBitmap
+}
+Gdip_SaveBitmapToFile(pBitmap, sOutput) {
+    SplitPath, sOutput,,, sExt
+    StringLower, sExt, sExt
+    sGUID := (sExt = "jpg" || sExt = "jpeg") ? "{557CF401-1A04-11D3-9A73-0000F81EF32E}" : "{557CF406-1A04-11D3-9A73-0000F81EF32E}"
+    VarSetCapacity(pGUID, 16, 0)
+    DllCall("ole32\CLSIDFromString", "WStr", sGUID, "Ptr", &pGUID)
+    DllCall("gdiplus\GdipSaveImageToFile", "Ptr", pBitmap, "WStr", sOutput, "Ptr", &pGUID, "UInt", 0)
+}
+DrawWatermark(pBitmap, text) {
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pBitmap, "Ptr*", pGraphics)
+    DllCall("gdiplus\GdipCreateSolidFill", "UInt", 0xCCFFFFFF, "Ptr*", pBrush)
+    DllCall("gdiplus\GdipCreateFontFamilyFromName", "WStr", "Arial", "UInt", 0, "Ptr*", hFamily)
+    DllCall("gdiplus\GdipCreateFont", "Ptr", hFamily, "Float", 22, "Int", 1, "Int", 3, "Ptr*", hFont)
+    DllCall("gdiplus\GdipDeleteFontFamily", "Ptr", hFamily)
+    VarSetCapacity(rectF, 16, 0)
+    NumPut(20.0, rectF, 0, "Float")
+    NumPut(20.0, rectF, 4, "Float")
+    NumPut(1500.0, rectF, 8, "Float")
+    NumPut(60.0, rectF, 12, "Float")
+    DllCall("gdiplus\GdipDrawString", "Ptr", pGraphics, "WStr", text, "Int", -1, "Ptr", hFont, "Ptr", &rectF, "Ptr", 0, "Ptr", pBrush)
+    DllCall("gdiplus\GdipDeleteBrush", "Ptr", pBrush)
+    DllCall("gdiplus\GdipDeleteFont", "Ptr", hFont)
+    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", pGraphics)
+}
+Gdip_SaveScreenWithWatermark(path, text) {
+    pToken := Gdip_Startup()
+    if !pToken
+        return
+    pBitmap := Gdip_BitmapFromScreen(0)
+    DrawWatermark(pBitmap, text)
+    Gdip_SaveBitmapToFile(pBitmap, path)
+    DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+    Gdip_Shutdown(pToken)
+}
+
+#If
+SetupHotkeys()
+
+SetTimer, DoUpdateCheck, -1500
+
+if (FileExist(ProfileFile))
+    Goto, InitMainScript
+
+Gui, Instruction: New, +AlwaysOnTop +LabelInstructionGui
+Gui, Color, 0x1A1A1A
+Gui, Font, s14 cWhite, Roboto
+Gui, Instruction: Add, Text, x10 y15 w480, Заполните информацию
+Gui, Font, s11 cWhite, Roboto
+Gui, Instruction: Add, Text, x10 y50 w480, Данные в папке CPD_Data
+Gui, Instruction: Add, Text, x10 y80 w480, Для повторного заполнения удалите DontDeleteCPD.txt
+Gui, Font, s10 cWhite, Roboto
+Gui, Instruction: Add, Button, x175 y120 w150 h30 gConfirm, Подтвердить
+Gui, Instruction: Show, w500 h170, Инструкция
+Return
+
+DoUpdateCheck:
+CheckUpdates()
+Return
+
+Confirm:
+Gui, Instruction: Destroy
+Gui, Margin, 25, 25
+Gui, Color, 0x1A1A1A
+Gui, Font, s14 Q5 cWhite, Roboto
+Gui, Add, Text, x20 y20 w180 h30, Имя и Фамилия:
+Gui, Add, Edit, x210 y17 w250 h30 vName BackgroundFFFFFF cBlack,
+Gui, Add, Text, x20 y65 w180 h30, Пол:
+Gui, Add, DropDownList, x210 y62 w250 h200 vPol, Мужской||Женский
+Gui, Add, Text, x20 y110 w180 h30, Должность:
+Gui, Add, DropDownList, x210 y107 w250 h200 vPosition, Рядовой||Сержант|Лейтенант|Ст.Лейтенант|Спецназ|Нач.Спецназа|Полковник|Шериф
+Gui, Add, Text, x20 y155 w180 h30, Отдел:
+Gui, Add, DropDownList, x210 y152 w250 h200 vDepartment, -||IRC|PTO|RTU|NUD|CPO
+Gui, Add, Text, x20 y200 w180 h30, Должность в отд.:
+Gui, Add, DropDownList, x210 y197 w250 h200 vDeptRole, -||Начальник|Заместитель|Сотрудник|Стажер
+Gui, Add, Text, x20 y245 w180 h30, Номер жетона:
+Gui, Add, Edit, x210 y242 w250 h30 vBadge Limit5 BackgroundFFFFFF cBlack
+Gui, Font, cWhite
+Gui, Add, Button, x165 y295 w150 h35 gMakeChoice, Подтвердить
+Gui, Show, w490 h350, Введите информацию
+Return
+
+GuiClose:
+ExitApp
+Return
+
+MakeChoice:
+Gui, Submit, NoHide
+if (!RegExMatch(Name, "^[а-яА-ЯёЁ\s\-]+$")) {
+    MsgBox, 16, Ошибка, Имя только русскими буквами
+    Gui, Show
+    Return
+}
+if (!RegExMatch(Badge, "^\d{5}$")) {
+    MsgBox, 16, Ошибка, Жетон ровно 5 цифр
+    Gui, Show
+    Return
+}
+if (Pol = "" || Position = "" || Department = "" || DeptRole = "") {
+    MsgBox, 16, Ошибка, Заполните все поля
+    Gui, Show
+    Return
+}
+Name := StrReplace(Name, "|", " ")
+FileDelete, %DataFolder%\DontDeleteCPD.tmp
+FileAppend, %Name%|%Pol%|%Position%|%Department%|%DeptRole%|%Badge%|RIVV|ToriFoster|LNR|DREX|GZE|GZE, %DataFolder%\DontDeleteCPD.tmp
+FileMove, %DataFolder%\DontDeleteCPD.tmp, %ProfileFile%, 1
+Reload
+Return
+
+InstructionGuiClose:
+Gui, Instruction: Destroy
+ExitApp
+Return
+
+InitMainScript:
+FileRead, data, %ProfileFile%
+StringSplit, info, data, |
+If (info0 < 6) {
+    MsgBox, 16, Ошибка, Файл профиля повреждён.`nУдалите DontDeleteCPD.txt.
+    ExitApp
+}
+Name := info1, Pol := info2, Position := info3, Department := info4, DeptRole := info5, Badge := info6
+SignPTO := info7 ? info7 : "RIVV"
+SignIRC := info8 ? info8 : "ToriFoster"
+SignNUD := info9 ? info9 : "LNR"
+SignRTU := info10 ? info10 : "DREX"
+SignCPO := info11 ? info11 : "GZE"
+SignSheriff := info12 ? info12 : "GZE"
+
+GoSub, UpdateDeptSign
+isMenuOpen := false
+isRebindOpen := false
+isTransparent := false
+CurrentTab := 1
+SubTabBD := 1
+SubTabSet := 1
+BackupProfile()
+LoadPhrases()
+if !FileExist(CodesFile)
+    CreateDefaultCodes()
+Codes := LoadCodes()
+
+; Убран OnExit, чтобы ничего не блокировало закрытие
+Return
+
+F9::
+Suspend, Permit
+HotkeysPaused := !HotkeysPaused
+if (HotkeysPaused) {
+    Suspend, On
+    ShowTip("Хоткеи на паузе")
+    Menu, Tray, Tip, CPD — ПАУЗА
+} else {
+    Suspend, Off
+    ShowTip("Хоткеи активны")
+    Menu, Tray, Tip, CPD — Активен
+}
+Return
+
+F8::
+Suspend, Permit
+if (!RequireProfile())
+    Return
+if (isMenuOpen) {
+    Gui, Menu: Hide
+    isMenuOpen := false
+}
+if (isRebindOpen) {
+    Gui, Rebind: Destroy
+    isRebindOpen := false
+    Return
+}
+isRebindOpen := true
+
+Gui, Rebind: Destroy
+SetBatchLines, -1
+Gui, Rebind: New, +AlwaysOnTop +LabelRebindGui
+Gui, Rebind: Color, %BG%
+Gui, Rebind: Font, s10 bold %HiC%, Roboto
+Gui, Rebind: Add, Text, x15 y10 w470, Быстрый скриптер
+Gui, Rebind: Font, s8 Normal %TxtC%, Roboto
+Gui, Rebind: Add, Text, x15 y32 w470, F8/F9/F10 зарезервированы. Esc — отмена
+
+hkIdx := 0
+for _, key in HkOrder
+{
+    hkIdx++
+    if (hkIdx <= 10) {
+        lx := 15, cx := 130, cy := 65 + (hkIdx - 1) * 26
+    } else {
+        lx := 265, cx := 380, cy := 65 + (hkIdx - 11) * 26
+    }
+    Gui, Rebind: Font, s8 %TxtC%, Roboto
+    Gui, Rebind: Add, Text, x%lx% y%cy% w110 +BackgroundTrans, % HkNames[key]
+    tempHkVal := (%key%)
+    Gui, Rebind: Add, Hotkey, x%cx% y%cy% w100 h22 vRB%hkIdx%V, %tempHkVal%
+}
+
+Gui, Rebind: Font, s10 bold, Roboto
+Gui, Rebind: Add, Button, x130 y340 w110 h30 gApplyRebind Default, Применить
+Gui, Rebind: Add, Button, x250 y340 w110 h30 gCancelRebind, Отмена
+Gui, Rebind: Show, w480 h390, Быстрый скриптер
+SetBatchLines, 10ms
+Return
+
+RebindGuiEscape:
+RebindGuiClose:
+isRebindOpen := false
+Gui, Rebind: Destroy
+Return
+
+CancelRebind:
+isRebindOpen := false
+Gui, Rebind: Destroy
+Return
+
+ApplyRebind:
+Gui, Rebind: Submit, NoHide
+Loop, 19
+{
+    if (RB%A_Index%V = "") {
+        kName := HkOrder[A_Index]
+        tempCur := (%kName%)
+        RB%A_Index%V := tempCur
+        GuiControl, Rebind:, RB%A_Index%V, %tempCur%
+    }
+}
+Loop, 19
+{
+    v := RB%A_Index%V
+    if (v = "")
+        continue
+    if (IsReservedKey(v)) {
+        MsgBox, 16, Зарезервировано, Клавиша %v% системная
+        Return
+    }
+}
+hkVals := {}
+conflict := ""
+Loop, 19
+{
+    v := RB%A_Index%V
+    if (v = "")
+        continue
+    if hkVals.HasKey(v) {
+        conflict := GetHumanKey(v)
+        break
+    }
+    hkVals[v] := A_Index
+}
+if (conflict != "") {
+    MsgBox, 16, Конфликт, Хоткей %conflict% назначен дважды
+    Return
+}
+keys := ["ID","Miranda","Search","Photo","Arrest","FineP","FineC","DNA","Mega","Glass","PutCar","OutCar","HandcuffOn","HandcuffOff","Perimeter","Seize","Fingerprint","Wanted","Raid"]
+Loop, 19
+    IniWrite, % RB%A_Index%V, %SettingsFile%, Hotkeys, % keys[A_Index]
+
+isRebindOpen := false
+Gui, Rebind: Destroy
+Reload
+Return
+
+ShowRebindFromTray:
+GoSub, F8
+Return
+
+F10::
+Suspend, Permit
+if (!RequireProfile())
+    Return
+if (isMenuOpen) {
+    Gui, Menu: Hide
+    isMenuOpen := false
+    Return
+}
+if (isRebindOpen) {
+    Gui, Rebind: Destroy
+    isRebindOpen := false
+}
+
+isMenuOpen := true
+Gui, Menu: Destroy
+SetBatchLines, -1
+Gui, Menu: New, +AlwaysOnTop +LabelMenuGui -Caption +Border
+Gui, Menu: Color, %BG%, %BorderC%
+Gui, Menu: Font, s10 bold, Roboto
+
+Gui, Menu: Add, Button, x20 y15 w110 h30 gSelectTab1 vTabBtn1 +BackgroundTrans cBlue, Шпаргалка
+Gui, Menu: Add, Button, x135 y15 w110 h30 gSelectTab2 vTabBtn2 +BackgroundTrans %TabC%, Профиль
+Gui, Menu: Add, Button, x250 y15 w110 h30 gSelectTab3 vTabBtn3 +BackgroundTrans %TabC%, Настройки
+Gui, Menu: Add, Button, x365 y15 w125 h30 gSelectTab4 vTabBtn4 +BackgroundTrans %TabC%, База/Статы
+
+Gui, Menu: Font, s10, Roboto
+Gui, Menu: Add, Progress, x15 y50 w475 h1 Background888888 c888888 vDivider, 100
+
+Gui, Menu: Font, s9 Normal %TxtC%, Roboto
+Gui, Menu: Add, Button, x155 y60 w200 h26 gToggleTrans vTransBtn +BackgroundTrans, Скрыть интерфейс
+
+idx := 0
+for _, key in HkOrder
+{
+    idx++
+    if (idx <= 10) {
+        lx := 15, dx := 115, cy := 95 + (idx - 1) * 26
+    } else {
+        lx := 270, dx := 370, cy := 95 + (idx - 11) * 26
+    }
+    tempHkVal := (%key%)
+    hkStr := GetHumanKey(tempHkVal)
+    Gui, Menu: Font, s9 bold %HiC%, Roboto
+    Gui, Menu: Add, Text, x%lx% y%cy% w90 +BackgroundTrans vT%idx%A, %hkStr%
+    Gui, Menu: Font, s9 Normal %TxtC%, Roboto
+    Gui, Menu: Add, Text, x%dx% y%cy% w130 +BackgroundTrans vT%idx%B, % HkNames[key]
+}
+
+Gui, Menu: Font, s10 %TxtC%, Roboto
+Gui, Menu: Add, Text, x35 y65 w210 +BackgroundTrans vBText1, Имя и Фамилия:
+Gui, Menu: Add, Edit, x35 y90 w210 h26 vNewName gAutoSave BackgroundFFFFFF cBlack, %Name%
+Gui, Menu: Add, Text, x265 y65 w210 +BackgroundTrans vBText2, Номер жетона:
+Gui, Menu: Add, Edit, x265 y90 w210 h26 vNewBadge gAutoSave Limit5 BackgroundFFFFFF cBlack, %Badge%
+Gui, Menu: Add, Text, x35 y130 w210 +BackgroundTrans vBText3, Пол:
+PolList := (Pol = "Женский") ? "Мужской|Женский||" : "Мужской||Женский"
+Gui, Menu: Add, DropDownList, x35 y155 w210 vNewPol gAutoSave, %PolList%
+Gui, Menu: Add, Text, x265 y130 w210 +BackgroundTrans vBText4, Должность:
+PosList := Position . "||Рядовой|Сержант|Лейтенант|Ст.Лейтенант|Спецназ|Нач.Спецназа|Полковник|Шериф"
+Gui, Menu: Add, DropDownList, x265 y155 w210 vNewPosition gAutoSave, %PosList%
+Gui, Menu: Add, Text, x35 y195 w210 +BackgroundTrans vBText5, Отдел:
+DeptList := Department . "||-|IRC|PTO|RTU|NUD|CPO"
+Gui, Menu: Add, DropDownList, x35 y220 w210 vNewDepartment gAutoSave, %DeptList%
+Gui, Menu: Add, Text, x265 y195 w210 +BackgroundTrans vBText6, Должность в отделе:
+RoleList := DeptRole . "||-|Начальник|Заместитель|Сотрудник|Стажер"
+Gui, Menu: Add, DropDownList, x265 y220 w210 vNewDeptRole gAutoSave, %RoleList%
+
+Gui, Menu: Font, s8 Normal, Roboto
+Gui, Menu: Add, Button, x165 y255 w170 h20 gToggleSubTab vToggleSubBtn, Показать подписи
+Gui, Menu: Font, s9 Normal, Roboto
+Gui, Menu: Add, Button, x155 y285 w200 h25 gViewArrestsGUI vViewArrestsBtn, База арестов
+Gui, Menu: Add, Button, x155 y315 w200 h25 gViewStatsGUI vViewStatsBtn, Статистика
+
+Gui, Menu: Font, s10 %TxtC%, Roboto
+Gui, Menu: Add, Text, x35 y65 w210 +BackgroundTrans vStext1, Подпись PTO:
+Gui, Menu: Add, Edit, x35 y90 w210 h26 vNewSignPTO gAutoSave BackgroundFFFFFF cBlack, %SignPTO%
+Gui, Menu: Add, Text, x265 y65 w210 +BackgroundTrans vStext2, Подпись IRC:
+Gui, Menu: Add, Edit, x265 y90 w210 h26 vNewSignIRC gAutoSave BackgroundFFFFFF cBlack, %SignIRC%
+Gui, Menu: Add, Text, x35 y130 w210 +BackgroundTrans vStext3, Подпись NUD:
+Gui, Menu: Add, Edit, x35 y155 w210 h26 vNewSignNUD gAutoSave BackgroundFFFFFF cBlack, %SignNUD%
+Gui, Menu: Add, Text, x265 y130 w210 +BackgroundTrans vStext4, Подпись RTU:
+Gui, Menu: Add, Edit, x265 y155 w210 h26 vNewSignRTU gAutoSave BackgroundFFFFFF cBlack, %SignRTU%
+Gui, Menu: Add, Text, x35 y195 w210 +BackgroundTrans vStext5, Подпись CPO:
+Gui, Menu: Add, Edit, x35 y220 w210 h26 vNewSignCPO gAutoSave BackgroundFFFFFF cBlack, %SignCPO%
+Gui, Menu: Add, Text, x265 y195 w210 +BackgroundTrans vStext6, Подпись Шерифа:
+Gui, Menu: Add, Edit, x265 y220 w210 h26 vNewSignSheriff gAutoSave BackgroundFFFFFF cBlack, %SignSheriff%
+
+Gui, Menu: Font, s9 %TxtC%, Roboto
+Gui, Menu: Add, Button, x35 y65 w100 h24 gSetSubGeneral vSetSubBtn1 +BackgroundTrans cBlue, Общие
+Gui, Menu: Add, Button, x140 y65 w100 h24 gSetSubHotkeys vSetSubBtn2 +BackgroundTrans %TabC%, Хоткеи
+Gui, Menu: Add, Button, x245 y65 w100 h24 gSetSubTools vSetSubBtn3 +BackgroundTrans %TabC%, Утилиты
+
+Gui, Menu: Font, s10 %TxtC%, Roboto
+Gui, Menu: Add, Text, x35 y100 w210 +BackgroundTrans vStT1, Задержка чата (мс):
+Gui, Menu: Add, Edit, x35 y125 w210 h26 vSetChatOpen Number BackgroundFFFFFF cBlack, %ChatOpenDelay%
+Gui, Menu: Add, Text, x265 y100 w210 +BackgroundTrans vStT2, Задержка отправки (мс):
+Gui, Menu: Add, Edit, x265 y125 w210 h26 vSetChatSend Number BackgroundFFFFFF cBlack, %ChatSendDelay%
+Gui, Menu: Add, Text, x35 y165 w210 +BackgroundTrans vStT3, Тема:
+ThemeList := (ThemeName = "Светлая") ? "Темная|Светлая||" : "Темная||Светлая"
+Gui, Menu: Add, DropDownList, x35 y190 w210 vSetTheme, %ThemeList%
+Gui, Menu: Add, Text, x265 y165 w210 +BackgroundTrans vStT4, Прозрачность (50-255):
+Gui, Menu: Add, Slider, x265 y190 w210 h25 vSetTrans Range50-255 ToolTip, %TransLevel%
+Gui, Menu: Add, Text, x35 y235 w450 +BackgroundTrans vStT5, Discord Webhook (Общий лог):
+Gui, Menu: Add, Edit, x35 y260 w440 h26 vSetDiscord BackgroundFFFFFF cBlack, %DiscordWebhook%
+Gui, Menu: Font, s10 bold, Roboto
+Gui, Menu: Add, Button, x165 y300 w170 h35 gSaveSettingsBtn vSaveSetBtn, Сохранить
+
+hkIdx := 0
+for _, key in HkOrder
+{
+    hkIdx++
+    if (hkIdx <= 10) {
+        lx := 15, cx := 140, cy := 105 + (hkIdx - 1) * 26
+    } else {
+        lx := 265, cx := 390, cy := 105 + (hkIdx - 11) * 26
+    }
+    Gui, Menu: Font, s8 %TxtC%, Roboto
+    Gui, Menu: Add, Text, x%lx% y%cy% w120 +BackgroundTrans vHK%hkIdx%L, % HkNames[key]
+    tempHkVal := (%key%)
+    Gui, Menu: Add, Hotkey, x%cx% y%cy% w95 h22 vHK%hkIdx%V, %tempHkVal%
+}
+Gui, Menu: Font, s10 bold, Roboto
+Gui, Menu: Add, Button, x165 y380 w170 h35 gSaveHotkeysBtn vSaveHkBtn, Применить
+
+Gui, Menu: Font, s10 %TxtC%, Roboto
+Gui, Menu: Add, Text, x35 y100 w440 +BackgroundTrans vTlT1, Резервное копирование и обслуживание:
+Gui, Menu: Add, Button, x35 y135 w210 h30 gManualBackup vTlBtn1, Бэкап профиля
+Gui, Menu: Add, Button, x265 y135 w210 h30 gOpenFinesIni vTlBtn2, Редактор штрафов
+Gui, Menu: Add, Button, x35 y180 w210 h30 gViewPhrasesGUI vTlBtn3, Шаблоны фраз
+Gui, Menu: Add, Button, x265 y180 w210 h30 gOpenCodesIni vTlBtn7, Редактор кодексов
+Gui, Menu: Add, Button, x35 y225 w210 h30 gOpenSettingsFile vTlBtn4, settings.ini
+Gui, Menu: Add, Button, x265 y225 w210 h30 gOpenLogFile vTlBtn5, Открыть лог
+Gui, Menu: Add, Button, x35 y270 w210 h30 gTestDiscord vTlBtn6, Тест Discord
+Gui, Menu: Add, Button, x265 y270 w210 h30 gReloadScript vTlBtn8, Перезагрузить AHK
+Gui, Menu: Add, Button, x155 y315 w200 h30 gOpenScriptFolder vTlBtn10, Папка скрипта
+
+Gui, Menu: Font, s10 bold %HiC%, Roboto
+Gui, Menu: Add, Text, x35 y65 w440 +BackgroundTrans vDbT0, Сводка за сегодня:
+Gui, Menu: Font, s10 %TxtC%, Roboto
+Gui, Menu: Add, Text, x35 y95 w440 h60 +BackgroundTrans vDbStats, (нажмите Обновить)
+Gui, Menu: Font, s10 bold, Roboto
+Gui, Menu: Add, Button, x155 y165 w200 h30 gViewArrestsGUI vDbBtn1, База арестов
+Gui, Menu: Add, Button, x155 y200 w200 h30 gViewStatsGUI vDbBtn2, Статистика
+Gui, Menu: Add, Button, x155 y235 w200 h30 gRefreshStats vDbBtn3, Обновить
+Gui, Menu: Add, Button, x155 y270 w200 h30 gOpenCodesIni vDbBtn4, Редактор кодексов
+
+GoSub, HideTab2
+GoSub, HideTab3
+GoSub, HideTab4
+GoSub, ShowTab1
+
+Gui, Menu: Show, w510 h460, Управление CPD
+Menu, Tray, DeleteAll
+Menu, Tray, NoStandard
+Menu, Tray, Add, Быстрый скриптер (F8), ShowRebindFromTray
+Menu, Tray, Add, Меню (F10), ShowFromTray
+Menu, Tray, Add, Пауза (F9), F9
+Menu, Tray, Add, Выход, ExitScript
+Menu, Tray, Tip, CPD — Активен
+SetBatchLines, 10ms
+Return
+
+ShowFromTray:
+GoSub, F10
+Return
+
+ExitScript:
+Suspend, Permit
+ExitApp, 0
+Return
+
+ReloadScript:
+Suspend, Permit
+Reload
+Return
+
+OpenScriptFolder:
+Run, explorer.exe "%A_ScriptDir%"
+Return
+
+#If WinActive("Управление CPD")
+Esc::
+Suspend, Permit
+GoSub, MenuGuiClose
+Return
+#If
+
+SelectTab1:
+if (isTransparent)
+    return
+CurrentTab := 1
+GuiControl, Menu: +cBlue, TabBtn1
+GuiControl, Menu: +%TabC%, TabBtn2
+GuiControl, Menu: +%TabC%, TabBtn3
+GuiControl, Menu: +%TabC%, TabBtn4
+GoSub, HideTab2
+GoSub, HideTab3
+GoSub, HideTab4
+GoSub, ShowTab1
+Gui, Menu: Show, w510 h460, Управление CPD
+Return
+
+SelectTab2:
+if (isTransparent)
+    return
+CurrentTab := 2
+GuiControl, Menu: +%TabC%, TabBtn1
+GuiControl, Menu: +cBlue, TabBtn2
+GuiControl, Menu: +%TabC%, TabBtn3
+GuiControl, Menu: +%TabC%, TabBtn4
+SubTabBD := 1
+GoSub, HideTab1
+GoSub, HideTab2
+GoSub, HideTab3
+GoSub, HideTab4
+GoSub, ShowTab2
+Gui, Menu: Show, w510 h360, Управление CPD
+Return
+
+SelectTab3:
+if (isTransparent)
+    return
+CurrentTab := 3
+GuiControl, Menu: +%TabC%, TabBtn1
+GuiControl, Menu: +%TabC%, TabBtn2
+GuiControl, Menu: +cBlue, TabBtn3
+GuiControl, Menu: +%TabC%, TabBtn4
+GoSub, HideTab1
+GoSub, HideTab2
+GoSub, HideTab4
+GoSub, ShowTab3
+Gui, Menu: Show, w510 h480, Управление CPD
+Return
+
+SelectTab4:
+if (isTransparent)
+    return
+CurrentTab := 4
+GuiControl, Menu: +%TabC%, TabBtn1
+GuiControl, Menu: +%TabC%, TabBtn2
+GuiControl, Menu: +%TabC%, TabBtn3
+GuiControl, Menu: +cBlue, TabBtn4
+GoSub, HideTab1
+GoSub, HideTab2
+GoSub, HideTab3
+GoSub, ShowTab4
+GoSub, RefreshStats
+Gui, Menu: Show, w510 h320, Управление CPD
+Return
+
+ShowTab1:
+GuiControl, Menu: Show, TransBtn
+Loop, 19 {
+    GuiControl, Menu: Show, T%A_Index%A
+    GuiControl, Menu: Show, T%A_Index%B
+}
+Return
+HideTab1:
+GuiControl, Menu: Hide, TransBtn
+Loop, 19 {
+    GuiControl, Menu: Hide, T%A_Index%A
+    GuiControl, Menu: Hide, T%A_Index%B
+}
+Return
+
+ShowTab2:
+GuiControl, Menu: Show, ToggleSubBtn
+if (SubTabBD = 1) {
+    Loop, 6
+        GuiControl, Menu: Show, BText%A_Index%
+    GuiControl, Menu: Show, NewName
+    GuiControl, Menu: Show, NewBadge
+    GuiControl, Menu: Show, NewPol
+    GuiControl, Menu: Show, NewPosition
+    GuiControl, Menu: Show, NewDepartment
+    GuiControl, Menu: Show, NewDeptRole
+    GuiControl, Menu: Show, ViewArrestsBtn
+    GuiControl, Menu: Show, ViewStatsBtn
+    GuiControl, Menu:, ToggleSubBtn, Показать подписи
+} else {
+    Loop, 6
+        GuiControl, Menu: Show, Stext%A_Index%
+    GuiControl, Menu: Show, NewSignPTO
+    GuiControl, Menu: Show, NewSignIRC
+    GuiControl, Menu: Show, NewSignNUD
+    GuiControl, Menu: Show, NewSignRTU
+    GuiControl, Menu: Show, NewSignCPO
+    GuiControl, Menu: Show, NewSignSheriff
+    GuiControl, Menu:, ToggleSubBtn, Данные сотрудника
+}
+Return
+HideTab2:
+GuiControl, Menu: Hide, ToggleSubBtn
+Loop, 6 {
+    GuiControl, Menu: Hide, BText%A_Index%
+    GuiControl, Menu: Hide, Stext%A_Index%
+}
+GuiControl, Menu: Hide, NewName
+GuiControl, Menu: Hide, NewBadge
+GuiControl, Menu: Hide, NewPol
+GuiControl, Menu: Hide, NewPosition
+GuiControl, Menu: Hide, NewDepartment
+GuiControl, Menu: Hide, NewDeptRole
+GuiControl, Menu: Hide, ViewArrestsBtn
+GuiControl, Menu: Hide, ViewStatsBtn
+GuiControl, Menu: Hide, NewSignPTO
+GuiControl, Menu: Hide, NewSignIRC
+GuiControl, Menu: Hide, NewSignNUD
+GuiControl, Menu: Hide, NewSignRTU
+GuiControl, Menu: Hide, NewSignCPO
+GuiControl, Menu: Hide, NewSignSheriff
+Return
+
+ShowTab3:
+GuiControl, Menu: Show, SetSubBtn1
+GuiControl, Menu: Show, SetSubBtn2
+GuiControl, Menu: Show, SetSubBtn3
+if (SubTabSet = 1) {
+    Loop, 5
+        GuiControl, Menu: Show, StT%A_Index%
+    GuiControl, Menu: Show, SetChatOpen
+    GuiControl, Menu: Show, SetChatSend
+    GuiControl, Menu: Show, SetTheme
+    GuiControl, Menu: Show, SetTrans
+    GuiControl, Menu: Show, SetDiscord
+    GuiControl, Menu: Show, SaveSetBtn
+} else if (SubTabSet = 2) {
+    Loop, 19 {
+        GuiControl, Menu: Show, HK%A_Index%L
+        GuiControl, Menu: Show, HK%A_Index%V
+    }
+    GuiControl, Menu: Show, SaveHkBtn
+} else {
+    GuiControl, Menu: Show, TlT1
+    GuiControl, Menu: Show, TlBtn1
+    GuiControl, Menu: Show, TlBtn2
+    GuiControl, Menu: Show, TlBtn3
+    GuiControl, Menu: Show, TlBtn4
+    GuiControl, Menu: Show, TlBtn5
+    GuiControl, Menu: Show, TlBtn6
+    GuiControl, Menu: Show, TlBtn7
+    GuiControl, Menu: Show, TlBtn8
+    GuiControl, Menu: Show, TlBtn10
+}
+Return
+HideTab3:
+GuiControl, Menu: Hide, SetSubBtn1
+GuiControl, Menu: Hide, SetSubBtn2
+GuiControl, Menu: Hide, SetSubBtn3
+Loop, 5
+    GuiControl, Menu: Hide, StT%A_Index%
+Loop, 19 {
+    GuiControl, Menu: Hide, HK%A_Index%L
+    GuiControl, Menu: Hide, HK%A_Index%V
+}
+GuiControl, Menu: Hide, TlT1
+GuiControl, Menu: Hide, SetChatOpen
+GuiControl, Menu: Hide, SetChatSend
+GuiControl, Menu: Hide, SetTheme
+GuiControl, Menu: Hide, SetTrans
+GuiControl, Menu: Hide, SetDiscord
+GuiControl, Menu: Hide, SaveSetBtn
+GuiControl, Menu: Hide, SaveHkBtn
+GuiControl, Menu: Hide, TlBtn1
+GuiControl, Menu: Hide, TlBtn2
+GuiControl, Menu: Hide, TlBtn3
+GuiControl, Menu: Hide, TlBtn4
+GuiControl, Menu: Hide, TlBtn5
+GuiControl, Menu: Hide, TlBtn6
+GuiControl, Menu: Hide, TlBtn7
+GuiControl, Menu: Hide, TlBtn8
+GuiControl, Menu: Hide, TlBtn10
+Return
+
+ShowTab4:
+GuiControl, Menu: Show, DbT0
+GuiControl, Menu: Show, DbStats
+GuiControl, Menu: Show, DbBtn1
+GuiControl, Menu: Show, DbBtn2
+GuiControl, Menu: Show, DbBtn3
+GuiControl, Menu: Show, DbBtn4
+Return
+HideTab4:
+GuiControl, Menu: Hide, DbT0
+GuiControl, Menu: Hide, DbStats
+GuiControl, Menu: Hide, DbBtn1
+GuiControl, Menu: Hide, DbBtn2
+GuiControl, Menu: Hide, DbBtn3
+GuiControl, Menu: Hide, DbBtn4
+Return
+
+ToggleSubTab:
+SubTabBD := (SubTabBD = 1) ? 2 : 1
+GoSub, HideTab2
+GoSub, ShowTab2
+Return
+
+SetSubGeneral:
+SubTabSet := 1
+GuiControl, Menu: +cBlue, SetSubBtn1
+GuiControl, Menu: +%TabC%, SetSubBtn2
+GuiControl, Menu: +%TabC%, SetSubBtn3
+GoSub, HideTab3
+GoSub, ShowTab3
+Return
+SetSubHotkeys:
+SubTabSet := 2
+GuiControl, Menu: +%TabC%, SetSubBtn1
+GuiControl, Menu: +cBlue, SetSubBtn2
+GuiControl, Menu: +%TabC%, SetSubBtn3
+GoSub, HideTab3
+GoSub, ShowTab3
+Return
+SetSubTools:
+SubTabSet := 3
+GuiControl, Menu: +%TabC%, SetSubBtn1
+GuiControl, Menu: +%TabC%, SetSubBtn2
+GuiControl, Menu: +cBlue, SetSubBtn3
+GoSub, HideTab3
+GoSub, ShowTab3
+Return
+
+ToggleTrans:
+if (isTransparent) {
+    isTransparent := false
+    WinSet, Transparent, OFF, Управление CPD
+    WinSet, TransColor, OFF, Управление CPD
+    Gui, Menu: Color, %BG%, %BorderC%
+    GuiControl, Menu: Show, TabBtn1
+    GuiControl, Menu: Show, TabBtn2
+    GuiControl, Menu: Show, TabBtn3
+    GuiControl, Menu: Show, TabBtn4
+    GuiControl, Menu: Show, Divider
+    GuiControl, Menu: Move, TransBtn, x155 y60 w200 h26
+    GuiControl, Menu:, TransBtn, Скрыть интерфейс
+    if (CurrentTab = 1)
+        GoSub, SelectTab1
+    else if (CurrentTab = 2)
+        GoSub, SelectTab2
+    else if (CurrentTab = 3)
+        GoSub, SelectTab3
+    else if (CurrentTab = 4)
+        GoSub, SelectTab4
+} else {
+    isTransparent := true
+    GoSub, ApplyTransparentStyles
+}
+WinSet, Redraw,, Управление CPD
+Return
+
+ApplyTransparentStyles:
+Gui, Menu: Color, %BG%, %BorderC%
+WinSet, TransColor, OFF, Управление CPD
+WinSet, Transparent, %TransLevel%, Управление CPD
+GuiControl, Menu: Hide, TabBtn1
+GuiControl, Menu: Hide, TabBtn2
+GuiControl, Menu: Hide, TabBtn3
+GuiControl, Menu: Hide, TabBtn4
+GuiControl, Menu: Hide, Divider
+Gui, Menu: Show, w510 h460, Управление CPD
+GuiControl, Menu: Move, TransBtn, x150 y15 w210 h30
+GuiControl, Menu: Show, TransBtn
+GuiControl, Menu:, TransBtn, Показать интерфейс
+Return
+
+SaveSettingsBtn:
+Gui, Menu: Submit, NoHide
+if (SetChatOpen = "" || SetChatOpen < 100)
+    SetChatOpen := 250
+if (SetChatSend = "" || SetChatSend < 100)
+    SetChatSend := 250
+IniWrite, %SetChatOpen%, %SettingsFile%, General, ChatOpenDelay
+IniWrite, %SetChatSend%, %SettingsFile%, General, ChatSendDelay
+IniWrite, %SetTheme%, %SettingsFile%, General, Theme
+IniWrite, %SetTrans%, %SettingsFile%, General, TransLevel
+IniWrite, %SetDiscord%, %SettingsFile%, General, DiscordWebhook
+Reload
+Return
+
+SaveHotkeysBtn:
+Gui, Menu: Submit, NoHide
+Loop, 19
+{
+    if (HK%A_Index%V = "") {
+        kName := HkOrder[A_Index]
+        tempCur := (%kName%)
+        HK%A_Index%V := tempCur
+        GuiControl, Menu:, HK%A_Index%V, %tempCur%
+    }
+}
+Loop, 19
+{
+    v := HK%A_Index%V
+    if (v = "")
+        continue
+    if (IsReservedKey(v)) {
+        MsgBox, 16, Зарезервировано, Клавиша %v% системная
+        Return
+    }
+}
+hkVals := {}
+conflict := ""
+Loop, 19
+{
+    v := HK%A_Index%V
+    if (v = "")
+        continue
+    if hkVals.HasKey(v) {
+        conflict := GetHumanKey(v)
+        break
+    }
+    hkVals[v] := A_Index
+}
+if (conflict != "") {
+    MsgBox, 16, Конфликт, Хоткей %conflict% назначен дважды
+    Return
+}
+keys := ["ID","Miranda","Search","Photo","Arrest","FineP","FineC","DNA","Mega","Glass","PutCar","OutCar","HandcuffOn","HandcuffOff","Perimeter","Seize","Fingerprint","Wanted","Raid"]
+Loop, 19
+    IniWrite, % HK%A_Index%V, %SettingsFile%, Hotkeys, % keys[A_Index]
+Reload
+Return
+
+ManualBackup:
+BackupProfile()
+ShowTip("Бэкап создан")
+Return
+
+OpenFinesIni:
+LoadFines()
+Run, notepad.exe "%FinesFile%"
+Return
+OpenSettingsFile:
+Run, notepad.exe "%SettingsFile%"
+Return
+OpenCodesIni:
+if !FileExist(CodesFile)
+    CreateDefaultCodes()
+Run, notepad.exe "%CodesFile%"
+ShowTip("codes.ini открыт")
+Return
+OpenLogFile:
+If FileExist(LogFile)
+    Run, notepad.exe "%LogFile%"
+else
+    MsgBox, 64, Инфо, Лог пуст
+Return
+
+TestDiscord:
+Gui, Menu: Submit, NoHide
+if (Trim(SetDiscord) = "") {
+    MsgBox, 48, Discord, Укажите вебхук и сохраните
+    Return
+}
+SendDiscord("[CPD] Тест — " . Name . " (" . Badge . ")")
+ShowTip("Отправлено (проверьте Discord)")
+Return
+
+AutoSave:
+SetTimer, DoAutoSave, -500
+Return
+
+DoAutoSave:
+if !WinExist("Управление CPD") {
+    SetTimer, DoAutoSave, Off
+    Return
+}
+Gui, Menu: Submit, NoHide
+if (NewName = "")
+    NewName := Name
+if (NewName != "" && !RegExMatch(NewName, "^[а-яА-ЯёЁ\s-]+$")) {
+    GuiControl, Menu:, NewName, %Name%
+    ShowTip("Имя только русскими")
+    Return
+}
+if (NewBadge = "")
+    NewBadge := Badge
+if (NewBadge != "" && !RegExMatch(NewBadge, "^\d{1,5}$")) {
+    GuiControl, Menu:, NewBadge, %Badge%
+    ShowTip("Жетон только цифры")
+    Return
+}
+if (NewBadge != "" && StrLen(NewBadge) != 5)
+    Return
+
+NewName       := StrReplace(NewName, "|", " ")
+NewBadge      := StrReplace(NewBadge, "|", " ")
+NewSignPTO    := StrReplace(NewSignPTO, "|", " ")
+NewSignIRC    := StrReplace(NewSignIRC, "|", " ")
+NewSignNUD    := StrReplace(NewSignNUD, "|", " ")
+NewSignRTU    := StrReplace(NewSignRTU, "|", " ")
+NewSignCPO    := StrReplace(NewSignCPO, "|", " ")
+NewSignSheriff:= StrReplace(NewSignSheriff, "|", " ")
+
+IfExist, %ProfileFile%
+    FileCopy, %ProfileFile%, %DataFolder%\DontDeleteCPD.bak, 1
+
+FileDelete, %DataFolder%\DontDeleteCPD.tmp
+FileAppend, %NewName%|%NewPol%|%NewPosition%|%NewDepartment%|%NewDeptRole%|%NewBadge%|%NewSignPTO%|%NewSignIRC%|%NewSignNUD%|%NewSignRTU%|%NewSignCPO%|%NewSignSheriff%, %DataFolder%\DontDeleteCPD.tmp
+FileMove, %DataFolder%\DontDeleteCPD.tmp, %ProfileFile%, 1
+
+Name := NewName, Pol := NewPol, Position := NewPosition, Department := NewDepartment, DeptRole := NewDeptRole, Badge := NewBadge
+SignPTO := NewSignPTO, SignIRC := NewSignIRC, SignNUD := NewSignNUD, SignRTU := NewSignRTU, SignCPO := NewSignCPO, SignSheriff := NewSignSheriff
+GoSub, UpdateDeptSign
+ShowTip("Сохранено")
+Return
+
+ClearTip:
+ToolTip
+Return
+
+UpdateDeptSign:
+if (Department = "PTO")
+    DeptSign := SignPTO
+else if (Department = "IRC")
+    DeptSign := SignIRC
+else if (Department = "NUD")
+    DeptSign := SignNUD
+else if (Department = "RTU")
+    DeptSign := SignRTU
+else if (Department = "CPO")
+    DeptSign := SignCPO
+else
+    DeptSign := "-"
+Return
+
+RefreshStats:
+LoadStats()
+txt := "Арестов: " . StatArrests . " | Штрафов: " . StatFines . " (" . StatFinesSum . " $)`n"
+txt .= "Удостоверений: " . StatID . " | Миранда: " . StatMiranda . "`n"
+txt .= "Всего действий: " . StatTotal
+GuiControl, Menu:, DbStats, %txt%
+Return
+
+MenuGuiClose:
+SetTimer, DoAutoSave, Off
+if WinExist("Управление CPD") {
+    WinSet, TransColor, OFF, Управление CPD
+    WinSet, Transparent, OFF, Управление CPD
+    Gui, Menu: Destroy
+}
+isMenuOpen := false
+Return
+
+DoID:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+MskTime := A_NowUTC
+MskTime += 3, Hours
+FormatTime, CurrentDate, %MskTime%, dd.MM.yyyy
+LogAction("Показано удостоверение")
+SendChat("/me " . RP("достал","достала") . " удостоверение из кармана, после чего " . RP("показал","показала") . " его гражданскому напротив")
+SendChat("/do Информация: " . Name . " | Фото: 3x4 | Орг: CPD | Должность: " . Position . " | Выдано: " . CurrentDate . " | Шериф: " . SignSheriff . " | Отдел: " . Department . " / " . DeptRole . " (" . DeptSign . ") | печать CPD")
+SendChat("/me после того как гражданин напротив изучил документ, " . RP("убрал","убрала") . " его во внутренний карман рубашки")
+SendChat("/do На груди висит жетон: Central Police Department | Номер жетона: " . Badge)
+Return
+
+DoMiranda:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Зачитано правило Миранды")
+SendChat("Вы имеете право хранить молчание, ваши слова будут использоваться против вас. Вы имеете право на один телефонный звонок протяжённостью 1 минута. Также вы имеете право на адвоката, в случае его необходимости мы осуществим вызов. Вы понимаете свои права?")
+Return
+
+DoSearchGUI:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+PendingAction := "Search"
+GoSub, ShowDynInput
+Return
+
+DoPhotoGUI:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+PendingAction := "Photo"
+GoSub, ShowDynInput
+Return
+
+DoFingerprintGUI:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+PendingAction := "Fingerprint"
+GoSub, ShowDynInput
+Return
+
+DoWantedGUI:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+PendingAction := "Wanted"
+GoSub, ShowDynInput
+Return
+
+DoRaidGUI:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+PendingAction := "Raid"
+GoSub, ShowDynInput
+Return
+
+DoArrest:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+if !FileExist(CodesFile)
+    CreateDefaultCodes()
+Codes := LoadCodes()
+
+if (Codes["Уголовный"].Length() = 0) {
+    ShowTip("УК пуст — проверьте codes.ini")
+    Return
+}
+
+SendChat("/me достаёт из кармана бронежилета нужный ключ и вставляет его в замок, открывает дверь, хватается за куртку преступника, толкает преступника в камеру")
+Sleep, 500
+
+If !FileExist(ShotFolder)
+    FileCreateDir, %ShotFolder%
+FormatTime, ts,, dd.MM.yyyy_HH-mm-ss
+ShotPath := ShotFolder . "\Arrest_" . ts . ".png"
+Gdip_SaveScreenWithWatermark(ShotPath, "CPD | " . Name . " | " . ts)
+
+Gui, ArrestInput: Destroy
+Gui, ArrestInput: New, +AlwaysOnTop +LabelArrestInput
+Gui, ArrestInput: Color, %BG%
+Gui, ArrestInput: Font, s9 %TxtC%, Roboto
+Gui, ArrestInput: Add, Text, x10 y8 w540 +BackgroundTrans, Уголовный кодекс (поставьте галочки):
+
+Gui, ArrestInput: Font, s9 cBlack, Roboto
+Gui, ArrestInput: Add, ListView, x10 y28 w540 h270 vCrimLV -Multi, Статья
+GuiControlGet, hCrimLV, Hwnd, CrimLV
+SendMessage, 0x1036, 0x4, 0x4, , ahk_id %hCrimLV%
+Gui, ListView, %hCrimLV%
+Loop, % Codes["Уголовный"].Length() {
+    art := Codes["Уголовный"][A_Index]
+    LV_Add("", art.num . " " . art.name)
+}
+LV_ModifyCol(1, 520)
+
+Gui, ArrestInput: Font, s10 bold %HiC%, Roboto
+Gui, ArrestInput: Add, Text, x10 y305 w540 +BackgroundTrans vResultText, Выбрано статей: 0
+Gui, ArrestInput: Font, s10 bold, Roboto
+Gui, ArrestInput: Add, Button, x155 y335 w130 h30 gArrestSubmit Default, Подготовить
+Gui, ArrestInput: Add, Button, x295 y335 w130 h30 gArrestCancel, Отмена
+Gui, ArrestInput: Show, w560 h380, Арест
+
+SetTimer, UpdateArrestCalc, 200
+Return
+
+UpdateArrestCalc:
+    Gui, ArrestInput: Default
+    crimCount := 0
+    GuiControlGet, hwnd, Hwnd, CrimLV
+    if (!hwnd) {
+        SetTimer, UpdateArrestCalc, Off
+        Return
+    }
+    Gui, ListView, %hwnd%
+    row := 0
+    Loop {
+        row := LV_GetNext(row, "C")
+        if (!row)
+            break
+        crimCount++
+    }
+    GuiControl, ArrestInput:, ResultText, Выбрано статей: %crimCount%
+Return
+
+ArrestInputGuiClose:
+ArrestInputGuiEscape:
+ArrestCancel:
+    SetTimer, UpdateArrestCalc, Off
+    Gui, ArrestInput: Destroy
+Return
+
+ArrestSubmit:
+    SetTimer, UpdateArrestCalc, Off
+    Gui, ArrestInput: Submit, NoHide
+    Gui, ArrestInput: Default
+
+    crimList := ""
+    GuiControlGet, hwnd, Hwnd, CrimLV
+    Gui, ListView, %hwnd%
+    row := 0
+    Loop {
+        row := LV_GetNext(row, "C")
+        if (!row)
+            break
+        LV_GetText(fullName, row, 1)
+        if RegExMatch(fullName, "^(\d+(?:\.\d+)*)", m)
+            crimList .= (crimList = "" ? "" : " + ") . m1 . " УК"
+    }
+
+    Gui, ArrestInput: Destroy
+
+    if (crimList = "") {
+        ShowTip("Выберите хотя бы одну статью")
+        Return
+    }
+
+    Sleep, 400
+    ActivateGame()
+    Sleep, 400
+
+    if (!IsGameActive()) {
+        ShowTip("Игра не активна")
+        Return
+    }
+
+    SendInput, {t}
+    Sleep, %ChatOpenDelay%
+
+    SendRaw, /arrest %crimList% 
+    Sleep, 100
+    SendInput, {End}
+
+    FormatTime, timeNow,, dd.MM.yyyy HH:mm
+    FileAppend, [%timeNow%] [готово] %crimList%`n, %ArrestsFile%
+    LogAction("Арест подготовлен: " . crimList)
+    ShowTip("Введите причину и нажмите Enter")
+Return
+
+DoFineMenu:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+Gui, FineMenu: Destroy
+Gui, FineMenu: New, +AlwaysOnTop +LabelFineMenu
+Gui, FineMenu: Color, %BG%
+Gui, FineMenu: Font, s10 %TxtC%, Roboto
+Gui, FineMenu: Add, Text, x15 y10 w250 +BackgroundTrans, Выберите нарушение:
+Gui, FineMenu: Add, DropDownList, x15 y35 w250 vFineChoice, % LoadFines()
+Gui, FineMenu: Add, Button, x65 y75 w150 h30 gSubmitFine Default, Выписать штраф
+Gui, FineMenu: Show, w280 h120, Штраф
+Return
+
+FineMenuGuiClose:
+Gui, FineMenu: Destroy
+Return
+
+SubmitFine:
+Gui, FineMenu: Submit
+if (FineChoice = "") {
+    Gui, FineMenu: Destroy
+    Return
+}
+FineName := FineChoice
+FineSum := FineMap[FineName]
+if (FineSum = "") {
+    Gui, FineMenu: Destroy
+    ShowTip("Сумма не найдена")
+    Return
+}
+Gui, FineMenu: Destroy
+LogAction("Штраф: " . FineName . " (" . FineSum . ")")
+FormatTime, ts,, dd.MM.yyyy HH:mm
+FileAppend, [%ts%] %FineName% — %FineSum%$`n, %FinesLogFile%
+SendChat("/me достаёт из кармана личный КПК, начинает заводить дело о штрафе")
+SendChat("/me " . RP("взял","взяла") . " паспорт и " . RP("начал","начала") . " вписывать данные в КПК")
+SendChat("/me выписал штраф: " . FineName . " на " . FineSum . " рублей, убрал КПК")
+Return
+
+DoFineCar:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Штраф на авто")
+SendChat("/me сняв личный КПК с пояса, вбивает данные ТС и фото номера в КПК")
+SendChat("/me закончив обработку, высылает информацию о штрафе владельцу")
+Return
+
+DoMega:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Крик в мегафон")
+SendChat("/me сидя за рулем, открывает бардачок и достаёт мегафон, подносит ко рту")
+SendChat("/shout [Мегафон] Внимание! CPD, прижмитесь к обочине, заглушите двигатель. Руки на руль")
+Return
+
+DoGlass:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Разбито стекло")
+SendChat("/me " . RP("снял","сняла") . " дубинку, " . RP("нанес","нанесла") . " удар по боковому стеклу, разбивая")
+SendChat("/me " . RP("просунул","просунула") . " руку внутрь, " . RP("открыл","открыла") . " дверь")
+Return
+
+DoPutCar:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Задержанный в авто")
+SendChat("/me " . RP("открыл","открыла") . " дверь, придерживая за голову, " . RP("посадил","посадила") . " в салон, " . RP("закрыл","закрыла") . " и " . RP("заблокировал","заблокировала") . " дверь")
+Return
+
+DoOutCar:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Вытащен из авто")
+SendChat("/me " . RP("открыл","открыла") . " дверь, придерживая за руку, " . RP("вытащил","вытащила") . " из салона, " . RP("закрыл","закрыла") . " дверь")
+Return
+
+DoDNA:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+Gui, Suspect: New, +AlwaysOnTop
+Gui, Suspect: Color, %BG%
+Gui, Suspect: Font, s12 %TxtC%, Roboto
+Gui, Suspect: Add, Text, x20 y15 w360 h50 +BackgroundTrans, Введите имя задержанного.`nОтыгровки через 5 секунд.
+Gui, Suspect: Add, Edit, x20 y75 w360 h30 vSuspectName BackgroundFFFFFF cBlack
+Gui, Suspect: Add, Button, x60 y120 w110 h35 gStartDNA Default, Ок
+Gui, Suspect: Add, Button, x230 y120 w110 h35 gCancelDNA, Отмена
+Gui, Suspect: Show, w400 h175, Данные задержанного
+Return
+
+DoHandcuffOn:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Наручники надеты")
+SendChat("/me " . RP("снял","сняла") . " наручники с пояса, " . RP("завёл","завела") . " руки за спину и " . RP("защёлкнул","защёлкнула") . " браслеты")
+SendChat("/do Наручники затянуты, ключ у сотрудника")
+Return
+
+DoHandcuffOff:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Наручники сняты")
+SendChat("/me " . RP("достал","достала") . " ключ, " . RP("вставил","вставила") . " в замок и " . RP("снял","сняла") . " наручники")
+Return
+
+DoPerimeter:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Оцепление")
+SendChat("/me " . RP("достал","достала") . " сигнальную ленту из багажника и " . RP("огородил","огородила") . " место")
+SendChat("/do Место оцеплено, доступ запрещён")
+Return
+
+DoSeize:
+if (!RequireProfile())
+    Return
+if (!IsGameActive())
+    Return
+LogAction("Изъято оружие")
+SendChat("/me аккуратно " . RP("изъял","изъяла") . " оружие, " . RP("вынул","вынула") . " магазин, " . RP("поставил","поставила") . " на предохранитель")
+SendChat("/do Оружие изъято, составлен протокол")
+Return
+
+ShowDynInput:
+Gui, DynInput: Destroy
+Gui, DynInput: New, +AlwaysOnTop +LabelDynInput
+Gui, DynInput: Color, %BG%
+Gui, DynInput: Font, s10 %TxtC%, Roboto
+if (PendingAction = "Search")
+    Gui, DynInput: Add, Text, x20 y15 w260 h20 +BackgroundTrans, Введите имя (Обыск):
+else if (PendingAction = "Photo")
+    Gui, DynInput: Add, Text, x20 y15 w260 h20 +BackgroundTrans, Введите имя (Фото):
+else if (PendingAction = "Fingerprint")
+    Gui, DynInput: Add, Text, x20 y15 w260 h20 +BackgroundTrans, Введите имя (Отпечатки):
+else if (PendingAction = "Wanted")
+    Gui, DynInput: Add, Text, x20 y15 w260 h20 +BackgroundTrans, Введите имя (Розыск):
+else if (PendingAction = "Raid")
+    Gui, DynInput: Add, Text, x20 y15 w260 h20 +BackgroundTrans, Введите ники (Рейд):
+Gui, DynInput: Add, Edit, x20 y40 w260 h25 vDynName BackgroundFFFFFF cBlack
+Gui, DynInput: Add, Button, x40 y80 w100 h30 gDynInput_OK Default, ОК
+Gui, DynInput: Add, Button, x160 y80 w100 h30 gDynInput_Cancel, Отмена
+Gui, DynInput: Show, w300 h130, Действие
+Return
+
+DynInput_Cancel:
+DynInputGuiClose:
+Gui, DynInput: Destroy
+Return
+
+DynInput_OK:
+Gui, DynInput: Submit, NoHide
+Gui, DynInput: Destroy
+if (Trim(DynName) = "") {
+    ShowTip("Имя не введено")
+    Return
+}
+TargetName := Trim(DynName)
+if (PendingAction = "Search")
+    GoSub, DoSearch
+else if (PendingAction = "Photo")
+    GoSub, DoPhoto
+else if (PendingAction = "Fingerprint")
+    GoSub, DoFingerprint
+else if (PendingAction = "Wanted")
+    GoSub, DoWanted
+else if (PendingAction = "Raid")
+    GoSub, DoRaid
+Return
+
+DoSearch:
+if (!RequireProfile())
+    Return
+LogAction("Обыск: " . TargetName)
+ProcessActionWithWebhook("Search", TargetName)
+SendChat("/me " . RP("достал","достала") . " нитриловые перчатки, " . RP("натянул","натянула") . " на обе руки")
+Random, rand, 1, 3
+if (rand = 1)
+    SendChat("/me после " . RP("провел","провела") . " руками по верхним частям тела " . TargetName . ", затем по туловищу и поясу")
+else if (rand = 2)
+    SendChat("/me аккуратно " . RP("прохлопал","прохлопала") . " одежду " . TargetName . ", проверив карманы, пояс и скрытые места")
+else
+    SendChat("/me " . RP("приступил","приступила") . " к обыску " . TargetName . ", " . RP("осмотрел","осмотрела") . " воротник, рукава, пояс, карманы")
+Return
+
+DoPhoto:
+if (!RequireProfile())
+    Return
+LogAction("Фото: " . TargetName)
+ProcessActionWithWebhook("Photorobot", TargetName)
+SendChat("/me " . RP("открыл","открыла") . " на КПК 'Камера', " . RP("направил","направила") . " на " . TargetName . " и " . RP("сфотографировал","сфотографировала") . " лицо с нескольких сторон, " . RP("загрузил","загрузила") . " в базу данных.")
+Return
+
+DoFingerprint:
+LogAction("Отпечатки: " . TargetName)
+ProcessActionWithWebhook("Fingerprint", TargetName)
+SendChat("/me " . RP("взял","взяла") . " сканер отпечатков, " . RP("приложил","приложила") . " палец " . TargetName . " к стеклу")
+Return
+
+DoWanted:
+LogAction("Розыск: " . TargetName)
+ProcessActionWithWebhook("Wanted", TargetName)
+SendChat("/me " . RP("достал","достала") . " КПК, " . RP("зашёл","зашла") . " в базу и " . RP("объявил","объявила") . " " . TargetName . " в розыск")
+Return
+
+DoRaid:
+LogAction("Рейд: " . TargetName)
+ProcessActionWithWebhook("Raid", TargetName)
+SendChat("/me " . RP("надел","надела") . " бронежилет и " . RP("начал","начала") . " рейд")
+Return
+
+CancelDNA:
+SuspectGuiClose:
+Gui, Suspect: Destroy
+Return
+
+StartDNA:
+Gui, Suspect: Submit, NoHide
+if (SuspectName != "" && !RegExMatch(SuspectName, "^[а-яА-ЯёЁ\s\-]+$")) {
+    MsgBox, 16, Ошибка, Только русские буквы
+    Gui, Suspect: Show
+    Return
+}
+Gui, Suspect: Destroy
+if (SuspectName = "")
+    SuspectName := "Unknown_Suspect"
+TargetMark := StrReplace(SuspectName, A_Space, "")
+TargetMark := StrReplace(TargetMark, "|", "")
+LogAction("Сбор ДНК: " . SuspectName)
+SetTimer, DoDNASequence, -5000
+Return
+
+DoDNASequence:
+ProcessActionWithWebhook("DNA", SuspectName)
+SendChat("/me " . RP("достал","достала") . " из чёрной сумки ручку, пробирку и кассету с реагентами, взял образец ДНК с внутренней стороны щеки")
+SendChat("/me " . RP("открыл","открыла") . " крышку кассеты, " . RP("поместил","поместила") . " образец слюны, " . RP("поставил","поставила") . " маркировку DET_DNA_" . TargetMark)
+SendChat("/me " . RP("открыл","открыла") . " на КПК 'Сканер', поочерёдно " . RP("приложил","приложила") . " кисти рук задержанного к дисплею")
+SendChat("/do Через некоторое время на экране КПК выскочила надпись 'Сканирование окончено'")
+SendChat("/me " . RP("загрузив","загрузив") . " отпечатки в бланк, " . RP("закрыл","закрыла") . " программу")
+Return
+
+ViewArrestsGUI:
+Gui, Arrests: Destroy
+Gui, Arrests: New, +AlwaysOnTop +LabelArrestsGui
+Gui, Arrests: Color, %BG%
+Gui, Arrests: Font, s10 %TxtC%, Roboto
+Gui, Arrests: Add, Text, x15 y10 w100 +BackgroundTrans, Поиск:
+Gui, Arrests: Add, Edit, x80 y8 w300 vArrestsSearch gFilterArrests BackgroundFFFFFF cBlack
+Gui, Arrests: Add, Button, x390 y8 w80 h24 gReloadArrests, Обновить
+Gui, Arrests: Add, Button, x475 y8 w80 h24 gExportArrests, CSV
+Gui, Arrests: Font, s9 %TxtC%, Roboto
+Gui, Arrests: Add, ListView, x15 y45 w560 h350 vArrestsLV, Дата|Статус|Статьи
+Gui, Arrests: Show, w590 h410, База арестов
+GoSub, ReloadArrests
+Return
+
+ArrestsGuiClose:
+Gui, Arrests: Destroy
+Return
+
+ReloadArrests:
+Gui, Arrests: Default
+LV_Delete()
+if !FileExist(ArrestsFile)
+    Return
+Loop, Read, %ArrestsFile%
+{
+    line := A_LoopReadLine
+    if RegExMatch(line, "^\[(.+?)\]\s*(.+)$", fullM) {
+        d := fullM1
+        rest := fullM2
+        if RegExMatch(rest, "^\[готово\]\s*(.+)$", prep) {
+            LV_Add("", d, "готово", prep1)
+        } else if RegExMatch(rest, "^\*(\d+)\s*[—–-]\s*(.*)$", star) {
+            LV_Add("", d, "*" . star1, star2)
+        } else if RegExMatch(rest, "^(.+?),\s*(.*)$", inner) {
+            LV_Add("", d, "—", inner1 . " — " . inner2)
+        } else {
+            LV_Add("", d, "—", rest)
+        }
+    }
+}
+LV_ModifyCol(1, 130)
+LV_ModifyCol(2, 70)
+LV_ModifyCol(3, 350)
+Return
+
+FilterArrests:
+Gui, Arrests: Submit, NoHide
+Gui, Arrests: Default
+LV_Delete()
+if !FileExist(ArrestsFile)
+    Return
+needle := ArrestsSearch
+Loop, Read, %ArrestsFile%
+{
+    line := A_LoopReadLine
+    if (needle != "" && !InStr(line, needle))
+        continue
+    if RegExMatch(line, "^\[(.+?)\]\s*(.+)$", fullM) {
+        d := fullM1
+        rest := fullM2
+        if RegExMatch(rest, "^\[готово\]\s*(.+)$", prep) {
+            LV_Add("", d, "готово", prep1)
+        } else if RegExMatch(rest, "^\*(\d+)\s*[—–-]\s*(.*)$", star) {
+            LV_Add("", d, "*" . star1, star2)
+        } else if RegExMatch(rest, "^(.+?),\s*(.*)$", inner) {
+            LV_Add("", d, "—", inner1 . " — " . inner2)
+        } else {
+            LV_Add("", d, "—", rest)
+        }
+    }
+}
+Return
+
+ExportArrests:
+if !FileExist(ArrestsFile) {
+    MsgBox, 64, Инфо, База пуста
+    Return
+}
+FormatTime, ts,, yyyyMMdd_HHmmss
+csv := DataFolder . "\Arrests_" . ts . ".csv"
+FileDelete, %csv%
+FileAppend, `"Дата`",`"Статус`",`"Статьи`"`n, %csv%
+Loop, Read, %ArrestsFile%
+{
+    line := A_LoopReadLine
+    if RegExMatch(line, "^\[(.+?)\]\s*(.*)$", fullM) {
+        d := fullM1
+        rest := fullM2
+        if RegExMatch(rest, "^\[готово\]\s*(.+)$", prep) {
+            FileAppend, `"%d%`",`"готово`",`"%prep1%`"`n, %csv%
+        } else if RegExMatch(rest, "^\*(\d+)\s*[—–-]\s*(.*)$", star) {
+            FileAppend, `"%d%`",`"*%star1%`",`"%star2%`"`n, %csv%
+        } else {
+            FileAppend, `"%d%`",`"`",`"%rest%`"`n, %csv%
+        }
+    }
+}
+Sleep, 200
+if FileExist(csv)
+    Run, notepad.exe "%csv%"
+else
+    MsgBox, 16, Ошибка, Не удалось создать CSV
+Return
+
+ViewStatsGUI:
+LoadStats()
+Gui, Stats: Destroy
+Gui, Stats: New, +AlwaysOnTop +LabelStatsGui
+Gui, Stats: Color, %BG%
+Gui, Stats: Font, s12 bold %HiC%, Roboto
+Gui, Stats: Add, Text, x20 y15 w400 +BackgroundTrans, Статистика за сегодня
+Gui, Stats: Font, s11 %TxtC%, Roboto
+Gui, Stats: Add, Text, x20 y55 w400 +BackgroundTrans, Арестов: %StatArrests%
+Gui, Stats: Add, Text, x20 y80 w400 +BackgroundTrans, Штрафов: %StatFines% (%StatFinesSum% $)
+Gui, Stats: Add, Text, x20 y105 w400 +BackgroundTrans, Удостоверений: %StatID%
+Gui, Stats: Add, Text, x20 y130 w400 +BackgroundTrans, Миранда: %StatMiranda%
+Gui, Stats: Add, Text, x20 y155 w400 +BackgroundTrans, Всего действий: %StatTotal%
+Gui, Stats: Font, s10 bold, Roboto
+Gui, Stats: Add, Button, x20 y200 w180 h30 gOpenLogFile, Открыть лог
+Gui, Stats: Add, Button, x210 y200 w180 h30 gViewArrestsGUI, База арестов
+Gui, Stats: Show, w420 h250, Статистика
+Return
+
+StatsGuiClose:
+Gui, Stats: Destroy
+Return
+
+ViewPhrasesGUI:
+LoadPhrases()
+Gui, Phrases: Destroy
+Gui, Phrases: New, +AlwaysOnTop +LabelPhrasesGui
+Gui, Phrases: Color, %BG%
+Gui, Phrases: Font, s10 %TxtC%, Roboto
+Gui, Phrases: Add, Text, x15 y10 w400 +BackgroundTrans, Шаблоны (двойной клик — отправить):
+Gui, Phrases: Add, Edit, x15 y35 w400 vPhraseCustom BackgroundFFFFFF cBlack
+Gui, Phrases: Add, Button, x420 y35 w80 h24 gAddPhrase, Добавить
+Gui, Phrases: Add, ListBox, x15 y70 w485 h200 vPhraseList gSendPhrase BackgroundFFFFFF cBlack, % ""
+Gui, Phrases: Show, w510 h290, Быстрые фразы
+GoSub, ReloadPhrases
+Return
+
+PhrasesGuiClose:
+Gui, Phrases: Destroy
+Return
+
+ReloadPhrases:
+Gui, Phrases: Default
+GuiControl, Phrases:, PhraseList, |
+Loop, Read, %PhrasesFile%
+{
+    line := Trim(A_LoopReadLine)
+    if (line = "")
+        continue
+    GuiControl, Phrases:, PhraseList, %line%
+}
+Return
+
+AddPhrase:
+Gui, Phrases: Submit, NoHide
+if (Trim(PhraseCustom) = "")
+    Return
+FileAppend, %PhraseCustom%`n, %PhrasesFile%
+GuiControl, Phrases:, PhraseCustom,
+GoSub, ReloadPhrases
+Return
+
+SendPhrase:
+Gui, Phrases: Submit, NoHide
+if (PhraseList = "")
+    Return
+phraseToSend := PhraseList
+Gui, Phrases: Destroy
+Sleep, 250
+SendChat(phraseToSend)
+Return
