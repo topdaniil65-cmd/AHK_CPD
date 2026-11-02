@@ -1,0 +1,1781 @@
+
+#Requires AutoHotkey v2.0
+#SingleInstance Force
+#Warn All, Off
+
+SendMode "Input"
+SetWorkingDir A_ScriptDir
+SetTitleMatchMode 2
+FileEncoding "UTF-8"
+ListLines 0
+ProcessSetPriority "High"
+
+; Вызов перетаскивания окна
+if IsSet(WM_LBUTTONDOWN)
+    OnMessage(0x0201, WM_LBUTTONDOWN)
+
+; ==============================================================================
+; 1. НАСТРОЙКИ, ПУТИ И АВТОЗАГРУЗКА МОДУЛЕЙ
+; ==============================================================================
+global ScriptVersion := "1.0"
+global DataFolder   := A_ScriptDir . "\CPD_Data"
+global LibFolder    := DataFolder . "\Lib"
+global ShotFolder   := DataFolder . "\Screenshots"
+global BackupFolder := DataFolder . "\Backups"
+global ProfileFile  := DataFolder . "\DontDeleteCPD.txt"
+global SettingsFile := DataFolder . "\settings.ini"
+global LogFile      := DataFolder . "\CPD_Action_Log.txt"
+global ArrestsFile  := DataFolder . "\Аресты.txt"
+global FinesLogFile := DataFolder . "\Штрафы.txt"
+global FinesFile    := DataFolder . "\fines.ini"
+global CodesFile    := DataFolder . "\codes.ini"
+
+if !DirExist(DataFolder)
+    DirCreate(DataFolder)
+if !DirExist(LibFolder)
+    DirCreate(LibFolder)
+if !DirExist(ShotFolder)
+    DirCreate(ShotFolder)
+if !DirExist(BackupFolder)
+    DirCreate(BackupFolder)
+
+; Автоматическое скачивание WebViewToo и его зависимостей ВСЕХ В ОДНУ ПАПКУ Lib
+dllArch := (A_PtrSize == 8) ? "64bit" : "32bit"
+FilesToDownload := [
+    { path: LibFolder . "\JSON.ahk",           url: "https://raw.githubusercontent.com/G33kDude/cJson.ahk/refs/heads/v2/Dist/JSON.ahk" },
+    { path: LibFolder . "\WebViewToo.ahk",     url: "https://raw.githubusercontent.com/G33kDude/WebViewToo/main/Lib/WebViewToo.ahk" },
+    { path: LibFolder . "\WebView2.ahk",       url: "https://raw.githubusercontent.com/thqby/ahk2_lib/master/WebView2/WebView2.ahk" },
+    { path: LibFolder . "\ComVar.ahk",         url: "https://raw.githubusercontent.com/thqby/ahk2_lib/master/ComVar.ahk" },
+    { path: LibFolder . "\Promise.ahk",        url: "https://raw.githubusercontent.com/thqby/ahk2_lib/master/Promise.ahk" },
+    { path: A_ScriptDir . "\WebView2Loader.dll", url: "https://raw.githubusercontent.com/thqby/ahk2_lib/master/WebView2/" . dllArch . "/WebView2Loader.dll" }
+]
+
+MissingFiles := false
+for item in FilesToDownload {
+    if !FileExist(item.path) {
+        MissingFiles := true
+        break
+    }
+}
+
+if (MissingFiles) {
+    ProgressGui := Gui("+AlwaysOnTop -Caption +Border", "Установка CPD")
+    ProgressGui.BackColor := "0x1A1A1A"
+    ProgressGui.SetFont("s10 cWhite", "Segoe UI")
+    ProgressGui.AddText("x20 y15 w300", "CPD скачивает модули...")
+    progBar := ProgressGui.AddProgress("x20 y45 w300 h15 c8b5cf6 Background333333", 0)
+    ProgressGui.Show("w340 h80")
+    
+    total := FilesToDownload.Length
+    idx := 0
+    for item in FilesToDownload {
+        idx++
+        if FileExist(item.path)
+            continue
+        try {
+            Download(item.url, item.path)
+            if !FileExist(item.path)
+                throw Error("Файл не был создан")
+        } catch as e {
+            MsgBox("Ошибка скачивания: " . item.path . "`n" . e.Message, "Критическая ошибка", 0x10)
+            ExitApp()
+        }
+        progBar.Value := Integer((idx / total) * 100)
+    }
+    ProgressGui.Destroy()
+
+    ; --- АВТОМАТИЧЕСКОЕ ИСПРАВЛЕНИЕ ПУТЕЙ ---
+    
+    ; 1. Исправляем WebViewToo.ahk (чтобы он искал WebView2.ahk в той же папке)
+    wvTooPath := LibFolder . "\WebViewToo.ahk"
+    if FileExist(wvTooPath) {
+        try {
+            content := FileRead(wvTooPath, "UTF-8")
+            content := StrReplace(content, "#Include ..\WebView2.ahk\WebView2\WebView2.ahk", "#Include WebView2.ahk")
+            FileDelete(wvTooPath)
+            FileAppend(content, wvTooPath, "UTF-8")
+        }
+    }
+
+    ; 2. Исправляем WebView2.ahk (чтобы он искал ComVar и Promise в той же папке)
+    wvPath := LibFolder . "\WebView2.ahk"
+    if FileExist(wvPath) {
+        try {
+            content := FileRead(wvPath, "UTF-8")
+            content := StrReplace(content, "#Include ..\..\ComVar.ahk", "#Include ComVar.ahk")
+            content := StrReplace(content, "#Include ..\..\Promise.ahk", "#Include Promise.ahk")
+            content := StrReplace(content, "#Include ..\ComVar.ahk", "#Include ComVar.ahk")
+            content := StrReplace(content, "#Include ..\Promise.ahk", "#Include Promise.ahk")
+            FileDelete(wvPath)
+            FileAppend(content, wvPath, "UTF-8")
+        }
+    }
+
+    Reload()
+    ExitApp()
+}
+
+#Include *i CPD_Data\Lib\JSON.ahk
+#Include *i CPD_Data\Lib\WebViewToo.ahk
+
+if !IsSet(WebViewGui) {
+    MsgBox(
+        "Библиотека WebViewToo не загрузилась.`n`n"
+        . "Проверьте файл: CPD_Data\Lib\WebViewToo.ahk`n"
+        . "Внутри него должен быть #Include WebView2.ahk`n`n"
+        . "Попробуйте удалить папку CPD_Data\Lib и перезапустить скрипт.",
+        "CPD — Ошибка зависимостей", 16)
+    ExitApp()
+}
+; ==============================================================================
+; 2. ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+; ==============================================================================
+global ChatOpenDelay := 250, ChatSendDelay := 250, TransLevel := 150
+global DiscordWebhook := "", ForumWebhook := "", MinecraftOnly := 0
+global Name := "", Pol := "", Position := "", Department := "", DeptRole := "", Badge := ""
+global SignPTO := "RIVV", SignIRC := "ToriFoster", SignNUD := "LNR", SignRTU := "DREX", SignCPO := "GZE", SignSheriff := "GZE", DeptSign := "-"
+global ThemeName := "Темная"
+global Hk := Map(), HkOrder := Array(), HkNames := Map(), FineMap := Map(), WebhookMap := Map(), RPActions := Map()
+global Codes := Map()
+global HotkeysPaused := false, PendingAction := "", SuspectName := "", isHiddenUI := false
+global MenuObj := ""
+global StatArrests := 0, StatFines := 0, StatID := 0, StatMiranda := 0, StatFinesSum := 0, StatTotal := 0
+
+if FileExist(SettingsFile) {
+    try ChatOpenDelay := Integer(Trim(IniRead(SettingsFile, "General", "ChatOpenDelay", "250")))
+    try ChatSendDelay := Integer(Trim(IniRead(SettingsFile, "General", "ChatSendDelay", "250")))
+    try TransLevel := Integer(Trim(IniRead(SettingsFile, "General", "TransLevel", "150")))
+    DiscordWebhook := Trim(IniRead(SettingsFile, "General", "DiscordWebhook", " "))
+    ForumWebhook := Trim(IniRead(SettingsFile, "General", "ForumWebhook", " "))
+    try MinecraftOnly := Integer(Trim(IniRead(SettingsFile, "General", "MinecraftOnly", "0")))
+    ThemeName := IniRead(SettingsFile, "General", "Theme", "Темная")
+}
+
+if (ChatOpenDelay < 100)
+    ChatOpenDelay := 250
+if (ChatSendDelay < 100)
+    ChatSendDelay := 250
+if (TransLevel < 50 || TransLevel > 255)
+    TransLevel := 150
+
+WebhookData := Map(
+    "Search", Map("title", "обыск", "role", "обыскивал"),
+    "DNA", Map("title", "днк", "role", "снимал ДНК"),
+    "Fingerprint", Map("title", "отпечатки-пальцев", "role", "снимал отпечатки"),
+    "Photorobot", Map("title", "фоторобот", "role", "фотографировал"),
+    "Wanted", Map("title", "розыск", "role", "выдал розыск"),
+    "Raid", Map("title", "рейды", "role", "проводил")
+)
+
+for key, data in WebhookData {
+    url := IniRead(SettingsFile, "Webhooks", key, " ")
+    WebhookMap[key] := Map("url", url, "title", data["title"], "role", data["role"])
+}
+
+HkDefaults := Map("ID", "!4", "Miranda", "!5", "Search", "!6", "Photo", "!7", "Arrest", "!8"
+    , "FineP", "!sc018", "FineC", "!sc019", "DNA", "!sc020"
+    , "Mega", "^1", "Glass", "^2", "PutCar", "^3", "OutCar", "^4"
+    , "HandcuffOn", "!9", "HandcuffOff", "!0", "Perimeter", "^0"
+    , "Seize", "^sc00C", "Fingerprint", "!f", "Wanted", "!w", "Raid", "!r")
+
+for key, def in HkDefaults {
+    val := IniRead(SettingsFile, "Hotkeys", key, def)
+    Hk[key] := Trim(val)
+}
+
+HkNames := Map("ID", "Удостоверение", "Miranda", "Миранда", "Search", "Обыск", "Photo", "Фото+Отпеч.", "Arrest", "Арест", "FineP", "Штраф гражд.", "FineC", "Штраф авто", "DNA", "Сбор ДНК", "Mega", "Мегафон", "Glass", "Стекло", "PutCar", "В авто", "OutCar", "Из авто", "HandcuffOn", "Наручники+", "HandcuffOff", "Наручники-", "Perimeter", "Оцепление", "Seize", "Изъять", "Fingerprint", "Отпечатки", "Wanted", "Розыск", "Raid", "Рейд")
+HkOrder := ["ID", "Miranda", "Search", "Photo", "Arrest", "FineP", "FineC", "DNA", "Mega", "Glass", "PutCar", "OutCar", "HandcuffOn", "HandcuffOff", "Perimeter", "Seize", "Fingerprint", "Wanted", "Raid"]
+
+; ==============================================================================
+; 3. СИСТЕМНЫЕ ФУНКЦИИ
+; ==============================================================================
+GetHumanKey(k) {
+    if (k == "")
+        return ""
+    k := Trim(k)
+    out := ""
+    Loop {
+        ch := SubStr(k, 1, 1)
+        if (ch == "!") {
+            out .= "Alt+", k := SubStr(k, 2)
+        } else if (ch == "^") {
+            out .= "Ctrl+", k := SubStr(k, 2)
+        } else if (ch == "+") {
+            out .= "Shift+", k := SubStr(k, 2)
+        } else if (ch == "#") {
+            out .= "Win+", k := SubStr(k, 2)
+        } else break
+    }
+    if RegExMatch(k, "i)^sc([0-9a-f]+)$", &m) {
+        vk := DllCall("MapVirtualKey", "UInt", "0x" . m[1], "UInt", 3)
+        if (vk)
+            k := GetKeyName("vk" . Format("{:X}", vk))
+    }
+    return out . k
+}
+
+IsReservedKey(k) {
+    if (k == "")
+        return false
+    k := StrReplace(k, "~")
+    k := StrReplace(k, "$")
+    k := StrReplace(k, "*")
+    kU := StrUpper(k)
+    return (kU == "F9" || kU == "F10")
+}
+
+IsGameActive() {
+    global HotkeysPaused, MinecraftOnly
+    if (HotkeysPaused)
+        return 0
+    if WinActive("Управление CPD") || WinActive("Действие") || WinActive("Данные задержанного")
+        || WinActive("Штраф") || WinActive("Введите информацию") || WinActive("Арест")
+        || WinActive("База арестов")
+        return 0
+    if (MinecraftOnly) {
+        if WinActive("ahk_exe javaw.exe") || WinActive("ahk_exe Minecraft.exe") || WinActive("ahk_exe Minecraft.Windows.exe")
+            return 1
+        return 0
+    } else {
+        if WinActive("ahk_exe javaw.exe") || WinActive("ahk_exe Minecraft.exe") || WinActive("ahk_exe Minecraft.Windows.exe")
+            || WinActive("ahk_exe RADMIR.exe") || WinActive("ahk_exe RAGEMP.exe") || WinActive("ahk_exe RAGE-MP.exe")
+            || WinActive("ahk_exe FiveM.exe") || WinActive("ahk_exe FiveM_b2189.exe")
+            || WinActive("ahk_exe GTA5.exe") || WinActive("ahk_exe PlayGTAV.exe")
+            return 1
+        return 0
+    }
+}
+
+ActivateGame() {
+    global MinecraftOnly
+    targetExes := MinecraftOnly ? ["javaw.exe", "Minecraft.exe", "Minecraft.Windows.exe"] : ["RAGEMP.exe", "GTA5.exe", "RADMIR.exe", "RAGE-MP.exe", "FiveM.exe", "javaw.exe", "Minecraft.exe", "Minecraft.Windows.exe"]
+    for exe in targetExes {
+        if WinExist("ahk_exe " . exe) {
+            WinActivate("ahk_exe " . exe)
+            break
+        }
+    }
+}
+
+RequireProfile() {
+    global ProfileFile
+    if !FileExist(ProfileFile) {
+        ShowTip("Сначала заполните профиль (F10)")
+        return false
+    }
+    return true
+}
+
+Guard() {
+    if !RequireProfile()
+        return false
+    if !IsGameActive()
+        return false
+    return true
+}
+
+RP(m, f) {
+    global Pol
+    return (Pol == "Мужской") ? m : f
+}
+
+LogAction(action) {
+    global LogFile, DiscordWebhook
+    timestamp := FormatTime(, "dd.MM.yyyy HH:mm:ss")
+    FileAppend("[" . timestamp . "] " . action . "`n", LogFile, "UTF-8")
+    if (Trim(DiscordWebhook) != "")
+        SendDiscord("[CPD] " . action)
+}
+
+ShowTip(txt, ms := 1500) {
+    ToolTip(txt)
+    SetTimer(() => ToolTip(), -ms)
+}
+
+SendChat(text) {
+    global ChatOpenDelay, ChatSendDelay
+    if !IsGameActive()
+        return false
+    SendLevel(1)
+    SendInput("{t}")
+    Sleep(ChatOpenDelay)
+    if !IsGameActive() {
+        SendInput("{Esc}")
+        SendLevel(0)
+        return false
+    }
+        SendText(text)
+    Sleep(50)
+    if !IsGameActive() {
+        SendInput("{Esc}")
+        SendLevel(0)
+        return false
+    }
+    SendInput("{ENTER}")
+    SendLevel(0)
+    Sleep(ChatSendDelay)
+    return true
+}
+
+SendRP(lines*) {
+    for line in lines
+        SendChat(line)
+}
+
+RunRPAction(key) {
+    global RPActions
+    if !Guard() || !RPActions.Has(key)
+        return
+    LogAction(RPActions[key]["log"])
+    for msg in RPActions[key]["msgs"]
+        SendChat(msg)
+}
+
+BuildRPActions() {
+    global RPActions
+    RPActions := Map()
+    RPActions["Miranda"] := Map("log", "Зачитано правило Миранды", "msgs", ["Вы имеете право хранить молчание, ваши слова будут использоваться против вас. Вы имеете право на один телефонный звонок протяжённостью 1 минута. Также вы имеете право на адвоката, в случае его необходимости мы осуществим вызов. Вы понимаете свои права?"])
+    RPActions["Mega"] := Map("log", "Крик в мегафон", "msgs", ["/me сидя за рулем автомобиля, открывает бардачок и достаёт мегафон, после чего подносит его ко рту", "/shout [Мегафон] Внимание! Говорит CPD, прижмитесь к обочине, остановите и заглушите двигатель. Положите руки на руль. В противном случае приму меры"])
+    RPActions["Glass"] := Map("log", "Разбито стекло", "msgs", ["/me " . RP("снял", "сняла") . " с тактического пояса дубинку, после чего " . RP("нанес", "нанесла") . " резкий удар по боковому стеклу автомобиля, разбивая его", "/me " . RP("просунул", "просунула") . " руку внутрь салона, " . RP("нащупал", "нащупала") . " замок и " . RP("открыл", "открыла") . " дверь автомобиля"])
+    RPActions["PutCar"] := Map("log", "Задержанный в авто", "msgs", ["/me " . RP("открыл", "открыла") . " дверь автомобиля, придерживая преступника за голову, " . RP("посадил", "посадила") . " его в салон, после чего " . RP("закрыл", "закрыла") . " и " . RP("заблокировал", "заблокировала") . " дверь"])
+    RPActions["OutCar"] := Map("log", "Вытащен из авто", "msgs", ["/me " . RP("открыл", "открыла") . " дверь автомобиля, придерживая преступника за руку, медленно " . RP("вытащил", "вытащила") . " его из салона на улицу, после чего " . RP("закрыл", "закрыла") . " дверь"])
+    RPActions["HandcuffOn"] := Map("log", "Наручники надеты", "msgs", ["/me " . RP("снял", "сняла") . " наручники с пояса, " . RP("завёл", "завела") . " руки за спину и " . RP("защёлкнул", "защёлкнула") . " браслеты", "/do Наручники затянуты, ключ у сотрудника"])
+    RPActions["HandcuffOff"] := Map("log", "Наручники сняты", "msgs", ["/me " . RP("достал", "достала") . " ключ, " . RP("вставил", "вставила") . " в замок и " . RP("снял", "сняла") . " наручники"])
+    RPActions["Perimeter"] := Map("log", "Оцепление", "msgs", ["/me " . RP("достал", "достала") . " сигнальную ленту из багажника и " . RP("огородил", "огородила") . " место", "/do Место оцеплено, доступ запрещён"])
+    RPActions["Seize"] := Map("log", "Изъято оружие", "msgs", ["/me аккуратно " . RP("изъял", "изъяла") . " оружие, " . RP("вынул", "вынула") . " магазин, " . RP("поставил", "поставила") . " на предохранитель", "/do Оружие изъято, составлен протокол"])
+    RPActions["FineCar"] := Map("log", "Штраф на авто", "msgs", ["/me сняв личный КПК с пояса, начинает заводить дело о машине, вбивает данные транспортного средства и фото номера в КПК", "/me закончив обработку данных, высылает информацию о штрафе автомобиля владельцу"])
+}
+
+ShowActionInput(action) {
+    global PendingAction
+    if !Guard()
+        return
+    if (PendingAction != "") {
+        ShowTip("Сначала завершите текущее действие")
+        return
+    }
+    PendingAction := action
+    DynInputGui := Gui("+AlwaysOnTop", "Действие")
+    DynInputGui.BackColor := "0x1A1A1A"
+    DynInputGui.SetFont("s10 cWhite", "Roboto")
+    labels := Map("Search", "Введите имя (Обыск):", "PhotoFingerprint", "Введите имя (Фото + Отпечатки):", "Wanted", "Введите имя (Розыск):", "Raid", "Введите ники (Рейд):")
+    DynInputGui.AddText("x20 y15 w260 h20", labels[action])
+    edit := DynInputGui.AddEdit("x20 y40 w260 h25 Background000000 cWhite", "")
+    DynInputGui.AddButton("x40 y80 w100 h30 Default", "ОК").OnEvent("Click", (btn, *) => DynInput_OK(edit.Value, DynInputGui))
+    DynInputGui.AddButton("x160 y80 w100 h30", "Отмена").OnEvent("Click", (btn, *) => (PendingAction := "", DynInputGui.Destroy()))
+    DynInputGui.Show("w300 h130")
+}
+
+DynInput_OK(value, gui) {
+    global PendingAction
+    gui.Destroy()
+    sanitized := StrReplace(Trim(value), "|", "")
+    sanitized := StrReplace(sanitized, "`n", "")
+    sanitized := StrReplace(sanitized, "`r", "")
+    if (sanitized == "") {
+        ShowTip("Имя не введено")
+        return
+    }
+    action := PendingAction
+    PendingAction := ""
+    ActivateGame()
+    switch action {
+        case "Search": SetTimer(DoSearch.Bind(sanitized), -2500)
+        case "PhotoFingerprint": SetTimer(DoPhotoFingerprint.Bind(sanitized), -2500)
+        case "Wanted": SetTimer(DoWanted.Bind(sanitized), -2500)
+        case "Raid": SetTimer(DoRaid.Bind(sanitized), -2500)
+    }
+}
+
+; ==============================================================================
+; 4. DISCORD И ОТЧЕТЫ
+; ==============================================================================
+SendDiscord(content) {
+    global DiscordWebhook
+    if (Trim(DiscordWebhook) == "")
+        return
+    payload := Map("content", content)
+    jsonBody := JSON.stringify(payload)
+    whr := ""
+    try {
+        whr := ComObject("WinHttp.WinHttpRequest.5.1")
+        whr.Open("POST", DiscordWebhook, false)
+        whr.SetRequestHeader("Content-Type", "application/json")
+        whr.Send(jsonBody)
+    } catch {
+    } finally {
+        try whr := ""
+    }
+}
+
+ProcessActionWithWebhook(key, targetName) {
+    global WebhookMap, Name
+    if !WebhookMap.Has(key)
+        return
+    data := WebhookMap[key]
+    url := data["url"]
+    if (Trim(url) == "" || url == " ")
+        return
+    title := data["title"]
+    role := data["role"]
+    staff := (Trim(Name) == "") ? "Неизвестный сотрудник" : Name
+    payload := Map("embeds", [Map(
+        "title", "CPD | " . title,
+        "description", "Сотрудник **" . staff . "** " . role . " **" . targetName . "**",
+        "color", 3447003)])
+    jsonBody := JSON.stringify(payload)
+    whr := ""
+    try {
+        whr := ComObject("WinHttp.WinHttpRequest.5.1")
+        whr.Open("POST", url, false)
+        whr.SetRequestHeader("Content-Type", "application/json")
+        whr.Send(jsonBody)
+    } catch {
+    } finally {
+        try whr := ""
+    }
+}
+
+StrToUTF8(str) {
+    stream := ""
+    result := ""
+    try {
+        stream := ComObject("ADODB.Stream")
+        stream.Type := 2
+        stream.Charset := "utf-8"
+        stream.Open()
+        stream.WriteText(str)
+        stream.Position := 0
+        stream.Type := 1
+        stream.Position := 0
+        if (stream.Size >= 3)
+            stream.Read(3)
+        result := stream.Read()
+    } finally {
+        try stream.Close()
+    }
+    return result
+}
+
+SendDiscordReport(title, fieldsMap, imagePath := "") {
+    global ForumWebhook, Name, ScriptVersion
+    if (Trim(ForumWebhook) == "" || ForumWebhook == " ")
+        return
+        
+    embed := Map("title", "📄 " . title, "color", 3447003, "fields", [], "footer", Map("text", "CPD AHK v" . ScriptVersion . " | " . Name), "timestamp", FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ"))
+    for k, v in fieldsMap
+        embed["fields"].Push(Map("name", k, "value", v, "inline", true))
+    payload := Map("thread_name", title . " | " . FormatTime(, "dd.MM.yy HH:mm"), "embeds", [embed])
+
+    if (imagePath != "" && FileExist(imagePath)) {
+        embed["image"] := Map("url", "attachment://screenshot.png")
+        jsonStr := JSON.stringify(payload)
+        boundary := "---------------------------" . A_TickCount
+        stream := ComObject("ADODB.Stream")
+        fileStream := ComObject("ADODB.Stream")
+        postData := ""
+        
+        try {
+            stream.Type := 1
+            stream.Open()
+            part1 := "--" . boundary . "`r`nContent-Disposition: form-data; name=`"payload_json`"`r`nContent-Type: application/json`r`n`r`n" . jsonStr . "`r`n"
+            stream.Write(StrToUTF8(part1))
+            part2 := "--" . boundary . "`r`nContent-Disposition: form-data; name=`"file0`"; filename=`"screenshot.png`"`r`nContent-Type: image/png`r`n`r`n"
+            stream.Write(StrToUTF8(part2))
+            fileStream.Type := 1
+            fileStream.Open()
+            fileStream.LoadFromFile(imagePath)
+            stream.Write(fileStream.Read())
+            part3 := "`r`n--" . boundary . "--`r`n"
+            stream.Write(StrToUTF8(part3))
+            stream.Position := 0
+            postData := stream.Read()
+        } finally {
+            try stream.Close()
+            try fileStream.Close()
+        }
+        
+        if (postData != "") {
+            whr := ""
+            try {
+                whr := ComObject("WinHttp.WinHttpRequest.5.1")
+                whr.Open("POST", ForumWebhook, false)
+                whr.SetRequestHeader("Content-Type", "multipart/form-data; boundary=" . boundary)
+                whr.Send(postData)
+            } catch {
+            } finally {
+                try whr := ""
+            }
+        }
+    } else {
+        jsonStr := JSON.stringify(payload)
+        whr := ""
+        try {
+            whr := ComObject("WinHttp.WinHttpRequest.5.1")
+            whr.Open("POST", ForumWebhook, false)
+            whr.SetRequestHeader("Content-Type", "application/json")
+            whr.Send(jsonStr)
+        } catch {
+        } finally {
+            try whr := ""
+        }
+    }
+}
+; ==============================================================================
+; 5. GDI+
+; ==============================================================================
+Gdip_Startup() {
+    if !DllCall("GetModuleHandle", "str", "gdiplus", "Ptr")
+        DllCall("LoadLibrary", "str", "gdiplus", "Ptr")
+    si := Buffer(A_PtrSize == 8 ? 24 : 16, 0)
+    NumPut("UInt", 1, si, 0)
+    local pToken := 0
+    DllCall("gdiplus\GdiplusStartup", "Ptr*", &pToken, "Ptr", si, "Ptr", 0)
+    return pToken
+}
+Gdip_Shutdown(pToken) {
+    DllCall("gdiplus\GdiplusShutdown", "Ptr", pToken)
+    if hModule := DllCall("GetModuleHandle", "str", "gdiplus", "Ptr")
+        DllCall("FreeLibrary", "Ptr", hModule)
+}
+Gdip_BitmapFromScreen(Screen := 0) {
+    if (Screen == 0) {
+        x := SysGet(76), y := SysGet(77), w := SysGet(78), h := SysGet(79)
+    } else {
+        S := StrSplit(Screen, "|")
+        x := Integer(S[1]), y := Integer(S[2]), w := Integer(S[3]), h := Integer(S[4])
+    }
+    hdc := DllCall("GetDC", "Ptr", 0, "Ptr")
+    hdcMem := DllCall("CreateCompatibleDC", "Ptr", hdc, "Ptr")
+    hbm := DllCall("CreateCompatibleBitmap", "Ptr", hdc, "Int", w, "Int", h, "Ptr")
+    obm := DllCall("SelectObject", "Ptr", hdcMem, "Ptr", hbm, "Ptr")
+    DllCall("BitBlt", "Ptr", hdcMem, "Int", 0, "Int", 0, "Int", w, "Int", h, "Ptr", hdc, "Int", x, "Int", y, "UInt", 0x00CC0020)
+    DllCall("SelectObject", "Ptr", hdcMem, "Ptr", obm)
+    DllCall("DeleteDC", "Ptr", hdcMem)
+    DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+    local pBitmap := 0
+    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "Ptr", hbm, "Ptr", 0, "Ptr*", &pBitmap)
+    DllCall("DeleteObject", "Ptr", hbm)
+    return pBitmap
+}
+Gdip_SaveBitmapToFile(pBitmap, sOutput) {
+    SplitPath(sOutput, , , &sExt)
+    sExt := StrLower(sExt)
+    sGUID := (sExt == "jpg" || sExt == "jpeg") ? "{557CF401-1A04-11D3-9A73-0000F81EF32E}" : "{557CF406-1A04-11D3-9A73-0000F81EF32E}"
+    pGUID := Buffer(16, 0)
+    DllCall("ole32\CLSIDFromString", "WStr", sGUID, "Ptr", pGUID)
+    DllCall("gdiplus\GdipSaveImageToFile", "Ptr", pBitmap, "WStr", sOutput, "Ptr", pGUID, "UInt", 0)
+}
+DrawWatermark(pBitmap, text) {
+    local pGraphics := 0, pBrush := 0, hFamily := 0, hFont := 0
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pBitmap, "Ptr*", &pGraphics)
+    DllCall("gdiplus\GdipCreateSolidFill", "UInt", 0xCCFFFFFF, "Ptr*", &pBrush)
+    DllCall("gdiplus\GdipCreateFontFamilyFromName", "WStr", "Arial", "UInt", 0, "Ptr*", &hFamily)
+    DllCall("gdiplus\GdipCreateFont", "Ptr", hFamily, "Float", 22, "Int", 1, "Int", 3, "Ptr*", &hFont)
+    DllCall("gdiplus\GdipDeleteFontFamily", "Ptr", hFamily)
+    rectF := Buffer(16, 0)
+    NumPut("Float", 20.0, rectF, 0), NumPut("Float", 20.0, rectF, 4)
+    NumPut("Float", 1500.0, rectF, 8), NumPut("Float", 60.0, rectF, 12)
+    DllCall("gdiplus\GdipDrawString", "Ptr", pGraphics, "WStr", text, "Int", -1, "Ptr", hFont, "Ptr", rectF, "Ptr", 0, "Ptr", pBrush)
+    DllCall("gdiplus\GdipDeleteBrush", "Ptr", pBrush)
+    DllCall("gdiplus\GdipDeleteFont", "Ptr", hFont)
+    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", pGraphics)
+}
+Gdip_SaveScreen(path) {
+    global Name
+    pToken := Gdip_Startup()
+    if !pToken
+        return
+    pBitmap := Gdip_BitmapFromScreen(0)
+    if (pBitmap) {
+        DrawWatermark(pBitmap, "CPD | " . Name . " | " . FormatTime(, "dd.MM.yyyy HH:mm:ss"))
+        Gdip_SaveBitmapToFile(pBitmap, path)
+        DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+    }
+    Gdip_Shutdown(pToken)
+}
+
+; ==============================================================================
+; 6. ПОЛИЦЕЙСКИЕ ОБРАБОТЧИКИ
+; ==============================================================================
+DoID(*) {
+    global Name, Position, Department, DeptRole, Badge, SignSheriff, DeptSign
+    if !Guard()
+        return
+    CurrentDate := FormatTime(A_NowUTC + 10800, "dd.MM.yyyy")
+    LogAction("Показано удостоверение")
+    SendChat("/me " . RP("достал", "достала") . " удостоверение из кармана, после чего " . RP("показал", "показала") . " его гражданскому напротив")
+    Sleep(300)
+    SendChat("/do В удостоверении написано: ИФ: " . Name . " | Фото сотрудника 3x4 | Организация : CPD | Должность: " . Position . " | Выдано: " . CurrentDate . " | Подпись шерифа: " . SignSheriff . " | Отдел: " . Department . " |  Подпись главы отдела : " . DeptSign . " | Должность в отделе: " . DeptRole . " | Печать CPD")
+    Sleep(300)
+    SendChat("/me после того как гражданин напротив изучил документ, " . RP("убрал", "убрала") . " его во внутренний карман рубашки")
+    Sleep(300)
+    SendChat("/do На груди висит жетон, на котором написано: Central Police Department | Номер жетона: " . Badge)
+    Sleep(800)
+    ShotPath := ShotFolder . "\ID_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Жетон", Badge, "Отдел", Department)
+    SendDiscordReport("Документы (Удостоверение)", fields, ShotPath)
+}
+
+DoFineMenu(*) {
+    if !Guard()
+        return
+    FineMenuGui := Gui("+AlwaysOnTop", "Штраф")
+    FineMenuGui.BackColor := "0x1A1A1A"
+    FineMenuGui.SetFont("s10 cWhite", "Roboto")
+    FineMenuGui.AddText("x15 y10 w250", "Выберите нарушение:")
+    fineList := LoadFines()
+    if (fineList == "") {
+        MsgBox("Файл fines.ini пуст или не создан", "CPD", "Icon!")
+        FineMenuGui.Destroy()
+        return
+    }
+    ddl := FineMenuGui.AddDropDownList("x15 y35 w250 Background000000 cWhite", StrSplit(fineList, "|"))
+    ddl.Text := StrSplit(fineList, "|")[1]
+    FineMenuGui.AddButton("x65 y75 w150 h30 Default", "Выписать штраф").OnEvent("Click", (btn, *) => SubmitFine(ddl.Text, FineMenuGui))
+    FineMenuGui.Show("w280 h120")
+}
+
+SubmitFine(FineChoice, gui) {
+    global FineMap, FinesLogFile, Name, Badge, Department
+    if (FineChoice == "")
+        return
+    FineSum := FineMap.Has(FineChoice) ? FineMap[FineChoice] : ""
+    if (FineSum == "") {
+        ShowTip("Сумма не найдена")
+        return
+    }
+    gui.Destroy()
+    if !Guard()
+        return
+    ActivateGame()
+    Sleep(2500)
+    LogAction("Штраф: " . FineChoice . " (" . FineSum . ")")
+    ts := FormatTime(, "dd.MM.yyyy HH:mm")
+    FileAppend("[" . ts . "] " . FineChoice . " — " . FineSum . "$`n", FinesLogFile, "UTF-8")
+    SendChat("/me достаёт из кармана личный КПК, начинает заводить дело о штрафе на человека напротив")
+    Sleep(300)
+    SendChat("/me " . RP("взял", "взяла") . " паспорт у человека напротив и " . RP("начал", "начала") . " вписывать данные в КПК")
+    Sleep(300)
+    SendChat("/me " . RP("выписал", "выписала") . " штраф человеку напротив, " . RP("выслал", "выслала") . " оповещение на электронную почту и " . RP("убрал", "убрала") . " КПК в карман")
+    Sleep(800)
+    ShotPath := ShotFolder . "\Fine_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name . " (" . Badge . ")", "Нарушение", FineChoice, "Сумма", FineSum . " руб.", "Отдел", Department)
+    SendDiscordReport("Штраф: " . FineChoice, fields, ShotPath)
+}
+
+DoDNA(*) {
+    global SuspectName
+    if !Guard()
+        return
+    SuspectGui := Gui("+AlwaysOnTop", "Данные задержанного")
+    SuspectGui.BackColor := "0x1A1A1A"
+    SuspectGui.SetFont("s12 cWhite", "Roboto")
+    SuspectGui.AddText("x20 y15 w360 h50", "Введите имя задержанного.`nОтыгровки через 5 секунд.")
+    edit := SuspectGui.AddEdit("x20 y75 w360 h30 Background000000 cWhite", SuspectName)
+    SuspectGui.AddButton("x60 y120 w110 h35 Default", "Ок").OnEvent("Click", (btn, *) => StartDNA(edit.Value, SuspectGui))
+    SuspectGui.AddButton("x230 y120 w110 h35", "Отмена").OnEvent("Click", (btn, *) => SuspectGui.Destroy())
+    SuspectGui.Show("w400 h175")
+}
+
+StartDNA(name, gui) {
+    global SuspectName
+    if (name != "" && !RegExMatch(name, "^[а-яА-ЯёЁA-Za-z\s-]+$")) {
+        MsgBox("Ошибка: только буквы", "Ошибка", "Icon!")
+        return
+    }
+    gui.Destroy()
+    ActivateGame()
+    Sleep(400)
+    SuspectName := (Trim(name) == "") ? "Unknown_Suspect" : Trim(name)
+    targetMark := StrReplace(StrReplace(SuspectName, A_Space, ""), "|", "")
+    LogAction("Сбор ДНК: " . SuspectName)
+    SetTimer(DoDNASequence.Bind(SuspectName, targetMark), -5000)
+}
+
+DoDNASequence(suspectName, targetMark, *) {
+    global Name, Department
+    SendChat("/me " . RP("достал", "достала") . " из чёрной сумки черную ручку, маленькую пробирку и одноразовую кассету с реагентами, после этого используя пробирку, " . RP("взял", "взяла") . " образец ДНК с внутренней стороны щеки задержанного.")
+    Sleep(300)
+    SendChat("/me " . RP("открыл", "открыла") . " крышку кассеты с реагентами, " . RP("поместил", "поместила") . " в нее образец слюны, после чего " . RP("закрыл", "закрыла") . " крышку кассеты и с помощью ручки " . RP("поставил", "поставила") . " на кассете маркировку DET_DNA_" . targetMark . ", после чего " . RP("убрал", "убрала") . " всё оборудование обратно в сумку и " . RP("закрыл", "закрыла") . " её.")
+    Sleep(300)
+    SendChat("/me " . RP("открыл", "открыла") . " на КПК программу 'Сканер', после чего поочерёдно " . RP("приложил", "приложила") . " обе кисти рук задержанного к дисплею КПК.")
+    Sleep(300)
+    SendChat("/do Через некоторое время на экране КПК выскочила надпись 'Сканирование окончено'.")
+    Sleep(300)
+    SendChat("/me загрузив отпечатки в бланк, " . RP("закрыл", "закрыла") . " программу.")
+    Sleep(300)
+    ProcessActionWithWebhook("DNA", suspectName)
+    Sleep(1000)
+    ShotPath := ShotFolder . "\DNA_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Задержанный", suspectName, "Отдел", Department)
+    SendDiscordReport("ДНК: " . suspectName, fields, ShotPath)
+}
+
+DoArrest(*) {
+    global CodesFile
+    if !Guard()
+        return
+    if !FileExist(CodesFile)
+        CreateDefaultCodes()
+    localCodes := LoadCodes()
+    if (localCodes["Уголовный"].Length == 0) {
+        MsgBox("Уголовный кодекс пуст. Проверьте codes.ini", "CPD", "Icon!")
+        return
+    }
+    ArrestGui := Gui("+AlwaysOnTop", "Арест")
+    ArrestGui.BackColor := "0x1A1A1A"
+    ArrestGui.SetFont("s9 cWhite", "Roboto")
+    ArrestGui.AddText("x10 y8 w100", "Задержанный:")
+    suspectEdit := ArrestGui.AddEdit("x90 y5 w200 Background000000 cWhite")
+    ArrestGui.AddText("x10 y30 w540", "Уголовный кодекс (поставьте галочки):")
+    ArrestGui.SetFont("s9 cBlack", "Roboto")
+    lv := ArrestGui.AddListView("x10 y50 w540 h250 -Multi Checked", ["Статья"])
+    for art in localCodes["Уголовный"]
+        lv.Add(, art["num"] . " " . art["name"])
+    lv.ModifyCol(1, 520)
+    ArrestGui.SetFont("s10 bold cYellow", "Roboto")
+    lblCount := ArrestGui.AddText("x10 y305 w540", "Выбрано статей: 0")
+    lv.OnEvent("ItemCheck", (*) => UpdateArrestCount(lv, lblCount))
+    ArrestGui.SetFont("s10 bold", "Roboto")
+    ArrestGui.AddButton("x155 y335 w130 h30 Default", "Подготовить").OnEvent("Click", (btn, *) => ArrestSubmit(lv, suspectEdit.Value, ArrestGui))
+    ArrestGui.AddButton("x295 y335 w130 h30", "Отмена").OnEvent("Click", (btn, *) => ArrestGui.Destroy())
+    ArrestGui.Show("w560 h380")
+}
+
+UpdateArrestCount(lv, lblCount) {
+    count := 0, row := 0
+    while (row := lv.GetNext(row, "C"))
+        count++
+    lblCount.Text := "Выбрано статей: " . count
+}
+
+ArrestSubmit(lv, suspectName, gui) {
+    global ArrestsFile, ChatOpenDelay, ShotFolder, Name, Badge, Department
+    crimList := ""
+    row := 0
+    while (row := lv.GetNext(row, "C")) {
+        fullName := lv.GetText(row, 1)
+        if RegExMatch(fullName, "^(\d+(?:\.\d+)*)", &m)
+            crimList .= (crimList == "" ? "" : " + ") . m[1] . " УК"
+    }
+    gui.Destroy()
+    if (crimList == "") {
+        ShowTip("Выберите хотя бы одну статью")
+        return
+    }
+    ActivateGame()
+    Sleep(400)
+    if !IsGameActive() {
+        ShowTip("Игра не активна или скрипт на паузе")
+        return
+    }
+    SendChat("/me достаёт из кармана бронежилета нужный ключ и вставляет его в замок, открывает дверь, хватается за куртку преступника, толкает преступника в камеру")
+    Sleep(500)
+    SendLevel(1)
+    SendInput("{t}")
+    Sleep(ChatOpenDelay)
+    SendText("/arrest " . crimList . " ")
+    SendInput("{End}")
+    SendLevel(0)
+    timeNow := FormatTime(, "dd.MM.yyyy HH:mm")
+    FileAppend("[" . timeNow . "] [готово] " . crimList . "`n", ArrestsFile, "UTF-8")
+    LogAction("Арест подготовлен: " . crimList)
+    ShowTip("Введите причину и нажмите Enter")
+    Sleep(6000)
+    ToolTip()
+    ShotPath := ShotFolder . "\Arrest_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    if (Trim(suspectName) == "")
+        suspectName := "Неизвестный"
+    fields := Map("Сотрудник", Name . " (" . Badge . ")", "Задержанный", suspectName, "Статьи", crimList, "Отдел", Department)
+    SendDiscordReport("Арест: " . suspectName, fields, ShotPath)
+}
+
+DoSearch(target := "", *) {
+    global Name, Department
+    if (target == "" || !Guard())
+        return
+    LogAction("Обыск: " . target)
+    SendChat("/me " . RP("достал", "достала") . " нитриловые перчатки из заднего кармана, после чего " . RP("натянул", "натянула") . " их на обе руки")
+    Sleep(300)
+    SendChat("/me после " . RP("провел", "провела") . " руками по верхним частям тела в области груди и рук, затем " . RP("провел", "провела") . " руками по туловищу и нижним частям тела в области пояса, карманов и ног")
+    Sleep(300)
+    ProcessActionWithWebhook("Search", target)
+    Sleep(1000)
+    ShotPath := ShotFolder . "\Search_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Цель", target, "Отдел", Department)
+    SendDiscordReport("Обыск: " . target, fields, ShotPath)
+}
+
+DoPhotoFingerprint(target := "", *) {
+    global Name, Department
+    if (target == "" || !Guard())
+        return
+    LogAction("Фото + Отпечатки: " . target)
+    SendChat("/me " . RP("открыл", "открыла") . " на КПК программу 'Камера', после чего " . RP("направил", "направила") . " камеру КПК на преступника и " . RP("сфотографировал", "сфотографировала") . " лицо преступника с нескольких сторон, " . RP("закрыл", "закрыла") . " программу и " . RP("загрузил", "загрузила") . " все фото в базу данных.")
+    Sleep(300)
+    SendChat("/me " . RP("открыл", "открыла") . " на КПК программу 'Сканер', после чего поочерёдно " . RP("приложил", "приложила") . " обе кисти рук задержанного к дисплею КПК.")
+    Sleep(300)
+    SendChat("/do Через некоторое время на экране КПК выскочила надпись 'Сканирование окончено'.")
+    Sleep(300)
+    SendChat("/me загрузив отпечатки в бланк, " . RP("закрыл", "закрыла") . " программу.")
+    Sleep(300)
+    ProcessActionWithWebhook("Photorobot", target)
+    ProcessActionWithWebhook("Fingerprint", target)
+    Sleep(1000)
+    ShotPath := ShotFolder . "\PhotoFingerprint_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Задержанный", target, "Отдел", Department)
+    SendDiscordReport("Фоторобот и Отпечатки: " . target, fields, ShotPath)
+}
+
+DoWanted(target := "", *) {
+    global Name, Department
+    if (target == "" || !Guard())
+        return
+    LogAction("Розыск: " . target)
+    SendChat("/me " . RP("достал", "достала") . " КПК, " . RP("зашёл", "зашла") . " в базу и " . RP("объявил", "объявила") . " " . target . " в розыск")
+    Sleep(300)
+    ProcessActionWithWebhook("Wanted", target)
+    Sleep(1000)
+    ShotPath := ShotFolder . "\Wanted_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Задержанный", target, "Отдел", Department)
+    SendDiscordReport("Розыск: " . target, fields, ShotPath)
+}
+
+DoRaid(target := "", *) {
+    global Name, Department
+    if (target == "" || !Guard())
+        return
+    LogAction("Рейд: " . target)
+    SendChat("/me " . RP("надел", "надела") . " бронежилет и " . RP("начал", "начала") . " рейд")
+    Sleep(300)
+    ProcessActionWithWebhook("Raid", target)
+    Sleep(1000)
+    ShotPath := ShotFolder . "\Raid_" . FormatTime(, "dd.MM.yyyy_HH-mm-ss") . ".png"
+    Gdip_SaveScreen(ShotPath)
+    fields := Map("Сотрудник", Name, "Участники", target, "Отдел", Department)
+    SendDiscordReport("Рейд: " . target, fields, ShotPath)
+}
+
+; ==============================================================================
+; 7. КОНФИГУРАЦИОННЫЕ ИНСТРУМЕНТЫ
+; ==============================================================================
+LoadFines() {
+    global FinesFile, FineMap
+    if !FileExist(FinesFile)
+        FileAppend("; Название=Сумма`nПревышение скорости=5000`nЕзда без прав=15000`nНеповиновение сотруднику=10000`nПарковка в неположенном месте=3000`n", FinesFile, "UTF-8")
+    FineMap := Map()
+    list := ""
+    try {
+        Loop Read FinesFile
+        {
+            line := Trim(A_LoopReadLine)
+            if (line == "" || SubStr(line, 1, 1) == ";")
+                continue
+            pos := InStr(line, "=")
+            if !pos
+                continue
+            name := Trim(SubStr(line, 1, pos - 1))
+            if (name == "")
+                continue
+            FineMap[name] := Trim(SubStr(line, pos + 1))
+            list .= name . "|"
+        }
+    } catch as e {
+        ShowTip("Не удалось прочитать fines.ini: " . e.Message)
+    }
+    return RTrim(list, "|")
+}
+
+CreateDefaultCodes() {
+    global CodesFile
+    if FileExist(CodesFile)
+        return
+    body := ""
+    body .= "[Административный]`n"
+    body .= "1.1=Нарушение общественного порядка|1000`n"
+    body .= "2.5=Парковка в неположенном месте|5000`n"
+    body .= "[Уголовный]`n"
+    body .= "5.1=[Гл.5] Убийство — умышленное причинение смерти другому лицу (2 года)`n"
+    body .= "8.2=[Гл.8] Кража — тайное хищение чужого имущества (1 год)`n"
+    FileAppend(body, CodesFile, "UTF-8")
+}
+
+LoadCodes() {
+    global CodesFile
+    codes := Map("Уголовный", [], "Административный", [])
+    if !FileExist(CodesFile)
+        return codes
+    section := ""
+    Loop Read CodesFile
+    {
+        line := Trim(A_LoopReadLine)
+        if (line == "" || SubStr(line, 1, 1) == ";")
+            continue
+        if (SubStr(line, 1, 1) == "[" && SubStr(line, -1) == "]") {
+            section := Trim(SubStr(line, 2, StrLen(line) - 2))
+            if !codes.Has(section)
+                codes[section] := []
+            continue
+        }
+        if (section == "")
+            continue
+        pos := InStr(line, "=")
+        if (!pos)
+            continue
+        num  := Trim(SubStr(line, 1, pos - 1))
+        rest := Trim(SubStr(line, pos + 1))
+        pos2 := InStr(rest, "|")
+        if (pos2) {
+            artName := Trim(SubStr(rest, 1, pos2 - 1))
+            val     := Trim(SubStr(rest, pos2 + 1))
+        } else {
+            artName := rest
+            val     := "0"
+        }
+        if (num == "" || artName == "")
+            continue
+        codes[section].Push(Map("num", num, "name", artName, "extra", val))
+    }
+    return codes
+}
+; ==============================================================================
+; 8. МЕНЮ (WebViewToo — Эталонный дизайн)
+; ==============================================================================
+CreateMenu() {
+    global MenuObj, Name, Badge, Pol, Position, Department, DeptRole
+    global SignPTO, SignIRC, SignNUD, SignRTU, SignCPO, SignSheriff
+    global ChatOpenDelay, ChatSendDelay, TransLevel, DiscordWebhook, ForumWebhook, MinecraftOnly
+    global HkOrder, HkNames, Hk
+
+    if IsObject(MenuObj) && WinExist("ahk_id " . MenuObj.Hwnd) {
+        try MenuObj.Show()
+        return
+    }
+
+    ; --- HTML РАЗМЕТКА ---
+    html := ""
+    html .= "<div class='top-nav'>"
+    html .= "<button class='nav-btn active' onclick='switchTab(`"tab1`", this)'>Шпаргалка</button>"
+    html .= "<button class='nav-btn' onclick='switchTab(`"tab2`", this)'>Профиль</button>"
+    html .= "<button class='nav-btn' onclick='switchTab(`"tab3`", this)'>Настройки</button>"
+    html .= "<button class='nav-btn' onclick='switchTab(`"tab4`", this)'>База/Статы</button>"
+    html .= "</div>"
+
+    html .= "<div id='tab1' class='tab-content active'>"
+    html .= "<div style='text-align: center; margin-top: 5px; margin-bottom: 20px;'>"
+    html .= "<button id='btnHide' onclick='callAHK(`"HideWindow`")' style='width: 250px;'>Скрыть интерфейс</button>"
+    html .= "</div>"
+    html .= "<div class='grid-container'>"
+    html .= "<div id='hotkeys-list' class='hotkey-grid'></div>"
+    html .= "</div>"
+    html .= "</div>"
+
+    html .= "<div id='tab2' class='tab-content'>"
+    html .= "<div class='form-group'><label>Имя и Фамилия:</label><input type='text' id='profName'></div>"
+    html .= "<div class='form-group'><label>Номер жетона:</label><input type='text' id='profBadge' maxlength='5'></div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Пол:</label><select id='profPol'><option value='Мужской'>Мужской</option><option value='Женский'>Женский</option></select></div>"
+    html .= "<div class='form-group'><label>Должность:</label><select id='profPos'><option>Рядовой</option><option>Сержант</option><option>Лейтенант</option><option>Ст.Лейтенант</option><option>Спецназ</option><option>Нач.Спецназа</option><option>Полковник</option><option>Шериф</option></select></div>"
+    html .= "</div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Отдел:</label><select id='profDept'><option>-</option><option>IRC</option><option>PTO</option><option>RTU</option><option>NUD</option><option>CPO</option></select></div>"
+    html .= "<div class='form-group'><label>Должность в отделе:</label><select id='profRole'><option>-</option><option>Начальник</option><option>Заместитель</option><option>Сотрудник</option><option>Стажер</option></select></div>"
+    html .= "</div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Подпись PTO:</label><input type='text' id='signPTO'></div>"
+    html .= "<div class='form-group'><label>Подпись IRC:</label><input type='text' id='signIRC'></div>"
+    html .= "</div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Подпись NUD:</label><input type='text' id='signNUD'></div>"
+    html .= "<div class='form-group'><label>Подпись RTU:</label><input type='text' id='signRTU'></div>"
+    html .= "</div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Подпись CPO:</label><input type='text' id='signCPO'></div>"
+    html .= "<div class='form-group'><label>Подпись Шерифа:</label><input type='text' id='signSheriff'></div>"
+    html .= "</div>"
+    html .= "<div style='text-align: center; margin-top: 20px; margin-bottom: 20px;'>"
+    html .= "<button onclick='saveProfileUI()' style='width: 200px;'>Сохранить профиль</button>"
+    html .= "</div>"
+    html .= "</div>"
+
+    html .= "<div id='tab3' class='tab-content'>"
+    html .= "<div class='sub-nav'>"
+    html .= "<button class='sub-btn active' onclick='switchSubTab(`"sub-general`", this)'>Общие</button>"
+    html .= "<button class='sub-btn' onclick='switchSubTab(`"sub-hotkeys`", this)'>Хоткеи</button>"
+    html .= "</div>"
+    html .= "<div class='tab-scroll-area'>"
+    html .= "<div id='sub-general' class='sub-tab-content active'>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Задержка чата (мс):</label><input type='number' id='setOpen'></div>"
+    html .= "<div class='form-group'><label>Задержка отправки (мс):</label><input type='number' id='setSend'></div>"
+    html .= "</div>"
+    html .= "<div class='form-row'>"
+    html .= "<div class='form-group'><label>Прозрачность (50-255):</label><input type='number' id='setTrans'></div>"
+    html .= "<div class='form-group' style='display:flex; align-items:center; justify-content:flex-start; padding-top: 25px;'>"
+    html .= "<input type='checkbox' id='setMCOnly' style='width:20px; height:20px;'>"
+    html .= "<label for='setMCOnly' style='margin-left: 10px; margin-top:0;'>Только Minecraft</label>"
+    html .= "</div>"
+    html .= "</div>"
+    html .= "<div class='form-group'><label>Discord Webhook (Общий лог):</label><input type='text' id='setDiscord'></div>"
+    html .= "<div class='form-group'><label>Discord Webhook (Отчеты в форум):</label><input type='text' id='setForum'></div>"
+    html .= "</div>"
+    html .= "<div id='sub-hotkeys' class='sub-tab-content'>"
+    html .= "<div id='hk-settings' class='hotkey-grid'></div>"
+    html .= "</div>"
+    html .= "<div style='text-align: center; margin-top: 20px; margin-bottom: 20px;'>"
+    html .= "<button onclick='saveSettingsUI()' style='width: 200px; padding: 12px;'>Сохранить всё</button>"
+    html .= "</div>"
+    html .= "</div>"
+    html .= "</div>"
+
+    html .= "<div id='tab4' class='tab-content'>"
+    html .= "<h2 style='text-align:center; margin-top:0;'>Статистика</h2>"
+    html .= "<div id='stats-box' style='text-align:center; font-size:18px; margin-bottom:20px; line-height: 1.6;'></div>"
+    html .= "<div style='text-align:center;'>"
+    html .= "<button onclick='callAHK(`"OpenLogFromUI`")'>Открыть лог</button>"
+    html .= "<button onclick='callAHK(`"ViewArrestsGUI`")'>База арестов</button>"
+    html .= "</div>"
+    html .= "</div>"
+
+    ; --- CSS СТИЛИ ---
+    css := ""
+    css .= "html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden !important; -ms-overflow-style: none !important; background-color: #0a0a0a; color: #ffffff; font-family: 'Segoe UI', sans-serif; }"
+    css .= ".top-nav { display: flex; gap: 10px; position: absolute; top: 15px; left: 15px; right: 15px; padding-bottom: 15px; border-bottom: 1px solid #222; background-color: #0a0a0a; z-index: 100; }"
+    css .= ".nav-btn { flex: 1; background-color: #000; color: #fff; border: 1px solid #fff; padding: 12px; cursor: pointer; border-radius: 4px; transition: all 0.3s ease; font-weight: bold; font-size: 15px; }"
+    css .= ".nav-btn:hover { background-color: #1a1a1a; border-color: #8b5cf6; }"
+    css .= ".nav-btn.active { background-color: #2e1065; border-color: #8b5cf6; box-shadow: 0 0 10px #8b5cf6; }"
+    css .= ".sub-nav { display: flex; gap: 10px; margin-bottom: 15px; flex-shrink: 0; }"
+    css .= ".sub-btn { flex: 1; background-color: #1a1a1a; color: #aaa; border: 1px solid #333; padding: 10px; border-radius: 4px; cursor: pointer; transition: all 0.3s ease; font-size: 15px; }"
+    css .= ".sub-btn:hover { color: #fff; border-color: #8b5cf6; }"
+    css .= ".sub-btn.active { background-color: #4c1d95; color: #fff; border-color: #8b5cf6; font-weight: bold; }"
+    css .= ".tab-content { display: none; animation: fadeIn 0.4s ease-in-out; position: absolute; top: 80px; bottom: 0; left: 0; right: 0; padding: 0 15px 20px 15px; box-sizing: border-box; }"
+    css .= "#tab1, #tab2, #tab4 { overflow-y: auto !important; -ms-overflow-style: none !important; }"
+    css .= "#tab3 { display: none; padding-bottom: 0; flex-direction: column; }"
+    css .= "#tab3.active { display: flex; }"
+    css .= ".tab-scroll-area { flex: 1; overflow-y: auto !important; -ms-overflow-style: none !important; padding-bottom: 20px; }"
+    css .= ".tab-content::-webkit-scrollbar { display: none !important; }"
+    css .= ".tab-scroll-area::-webkit-scrollbar { display: none !important; }"
+    css .= ".tab-content.active { display: block; }"
+    css .= ".sub-tab-content { display: none; animation: fadeIn 0.3s ease-in-out; }"
+    css .= ".sub-tab-content.active { display: block; }"
+    css .= "@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }"
+    css .= ".form-row { display: flex; gap: 20px; margin-bottom: 15px; }"
+    css .= ".form-group { flex: 1; display: flex; flex-direction: column; margin-bottom: 15px; }"
+    css .= "label { margin-bottom: 8px; font-size: 16px; color: #ccc; }"
+    css .= "input[type='text'], input[type='number'], select { background-color: #000; color: #fff; border: 1px solid #555; padding: 12px 15px; border-radius: 6px; outline: none; transition: all 0.3s ease; width: 100%; box-sizing: border-box; font-size: 16px; font-family: 'Segoe UI', sans-serif; }"
+    css .= "input[type='text']:focus, input[type='number']:focus, select:focus { border-color: #8b5cf6; box-shadow: 0 0 10px #8b5cf6; }"
+    css .= "button { background-color: #000; color: #fff; border: 1px solid #fff; padding: 12px 20px; cursor: pointer; border-radius: 6px; transition: all 0.3s ease; margin: 0 5px; font-size: 16px; }"
+    css .= "button:hover { background-color: #1a1a1a; border-color: #8b5cf6; box-shadow: 0 0 10px #8b5cf6; }"
+    css .= ".hotkey-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }"
+    css .= ".hk-item { display: flex; justify-content: space-between; align-items: center; background: #111; padding: 12px; border-radius: 6px; border: 1px solid #222; }"
+    css .= ".hk-item:hover { border-color: #555; }"
+    css .= ".hk-item span { font-size: 16px; }"
+    css .= ".hk-item input { width: 130px; text-align: center; padding: 10px; margin: 0; font-size: 16px; }"
+
+    ; --- JAVASCRIPT ---
+    js := ""
+    js .= "function switchTab(tabId, btn) {"
+    js .= "    var tabs = document.querySelectorAll('.tab-content');"
+    js .= "    for (var i = 0; i < tabs.length; i++) { tabs[i].classList.remove('active'); }"
+    js .= "    var btns = document.querySelectorAll('.nav-btn');"
+    js .= "    for (var j = 0; j < btns.length; j++) { btns[j].classList.remove('active'); }"
+    js .= "    document.getElementById(tabId).classList.add('active');"
+    js .= "    btn.classList.add('active');"
+    js .= "}"
+    js .= "function switchSubTab(tabId, btn) {"
+    js .= "    var tabs = document.querySelectorAll('.sub-tab-content');"
+    js .= "    for (var i = 0; i < tabs.length; i++) { tabs[i].classList.remove('active'); }"
+    js .= "    var btns = document.querySelectorAll('.sub-btn');"
+    js .= "    for (var j = 0; j < btns.length; j++) { btns[j].classList.remove('active'); }"
+    js .= "    document.getElementById(tabId).classList.add('active');"
+    js .= "    btn.classList.add('active');"
+    js .= "}"
+    js .= "function callAHK(funcName, data) {"
+    js .= "    if (window.chrome && window.chrome.webview) {"
+    js .= "        window.chrome.webview.postMessage({ action: funcName, data: data || null });"
+    js .= "    }"
+    js .= "}"
+    js .= "function saveProfileUI() {"
+    js .= "    callAHK('SaveProfileFromUI', {"
+    js .= "        profName: document.getElementById('profName').value,"
+    js .= "        profBadge: document.getElementById('profBadge').value,"
+    js .= "        profPol: document.getElementById('profPol').value,"
+    js .= "        profPos: document.getElementById('profPos').value,"
+    js .= "        profDept: document.getElementById('profDept').value,"
+    js .= "        profRole: document.getElementById('profRole').value,"
+    js .= "        signPTO: document.getElementById('signPTO').value,"
+    js .= "        signIRC: document.getElementById('signIRC').value,"
+    js .= "        signNUD: document.getElementById('signNUD').value,"
+    js .= "        signRTU: document.getElementById('signRTU').value,"
+    js .= "        signCPO: document.getElementById('signCPO').value,"
+    js .= "        signSheriff: document.getElementById('signSheriff').value"
+    js .= "    });"
+    js .= "}"
+    js .= "function saveSettingsUI() {"
+    js .= "    callAHK('SaveSettingsFromUI', {"
+    js .= "        setOpen: document.getElementById('setOpen').value,"
+    js .= "        setSend: document.getElementById('setSend').value,"
+    js .= "        setTrans: document.getElementById('setTrans').value,"
+    js .= "        setMCOnly: document.getElementById('setMCOnly').checked,"
+    js .= "        setDiscord: document.getElementById('setDiscord').value,"
+    js .= "        setForum: document.getElementById('setForum').value"
+    js .= "    });"
+    js .= "}"
+
+    ; Собираем всё в одну строку
+    fullHTML := "<!DOCTYPE html><html><head><meta charset='utf-8'><style>" . css . "</style></head><body>" . html . "<script>" . js . "</script></body></html>"
+
+    ; Создаем окно
+    if !IsSet(WebViewGui) {
+        MsgBox("Класс WebViewGui не загружен. Проверьте CPD_Data\Lib\WebViewToo.ahk.", "CPD — Ошибка", 16)
+        return
+    }
+
+    try {
+        MenuObj := WebViewGui("+AlwaysOnTop +Resize", "Управление CPD")
+        MenuObj.NavigateToString(fullHTML)
+    } catch as e {
+        MsgBox("Не удалось создать меню (WebViewToo).`n`n" . e.Message, "Ошибка", 16)
+        return
+    }
+
+    MenuObj.AddCallbackToScript("HideWindow",        HideWindow)
+    MenuObj.AddCallbackToScript("OpenLogFromUI",     OpenLogFromUI)
+    MenuObj.AddCallbackToScript("ViewArrestsGUI",    ViewArrestsGUI)
+    MenuObj.AddCallbackToScript("SaveProfileFromUI", ProcessWebProfile)
+    MenuObj.AddCallbackToScript("SaveSettingsFromUI",ProcessWebSettings)
+    MenuObj.AddCallbackToScript("CaptureHotkey",     CaptureHotkey)
+
+    try MenuObj.Show("w650 h750")
+    try SetDarkMode(MenuObj.Hwnd)
+    Sleep(500)
+
+    ; Заполняем данные
+    try {
+        MenuObj.ExecuteScript("document.getElementById('profName').value = '" . Name . "';")
+        MenuObj.ExecuteScript("document.getElementById('profBadge').value = '" . Badge . "';")
+        MenuObj.ExecuteScript("document.getElementById('profPol').value = '" . Pol . "';")
+        MenuObj.ExecuteScript("document.getElementById('profPos').value = '" . Position . "';")
+        MenuObj.ExecuteScript("document.getElementById('profDept').value = '" . Department . "';")
+        MenuObj.ExecuteScript("document.getElementById('profRole').value = '" . DeptRole . "';")
+        MenuObj.ExecuteScript("document.getElementById('signPTO').value = '" . SignPTO . "';")
+        MenuObj.ExecuteScript("document.getElementById('signIRC').value = '" . SignIRC . "';")
+        MenuObj.ExecuteScript("document.getElementById('signNUD').value = '" . SignNUD . "';")
+        MenuObj.ExecuteScript("document.getElementById('signRTU').value = '" . SignRTU . "';")
+        MenuObj.ExecuteScript("document.getElementById('signCPO').value = '" . SignCPO . "';")
+        MenuObj.ExecuteScript("document.getElementById('signSheriff').value = '" . SignSheriff . "';")
+        MenuObj.ExecuteScript("document.getElementById('setOpen').value = '" . ChatOpenDelay . "';")
+        MenuObj.ExecuteScript("document.getElementById('setSend').value = '" . ChatSendDelay . "';")
+        MenuObj.ExecuteScript("document.getElementById('setTrans').value = '" . TransLevel . "';")
+        MenuObj.ExecuteScript("document.getElementById('setMCOnly').checked = " . (MinecraftOnly ? "true" : "false") . ";")
+        MenuObj.ExecuteScript("document.getElementById('setDiscord').value = '" . DiscordWebhook . "';")
+        MenuObj.ExecuteScript("document.getElementById('setForum').value = '" . ForumWebhook . "';")
+    }
+
+        if IsSet(BuildHotkeysList)
+        BuildHotkeysList()
+    if IsSet(BuildHotkeysSettings)
+        BuildHotkeysSettings()
+    if IsSet(RefreshStatsUI)
+        RefreshStatsUI()
+}
+; ==============================================================================
+; 9. УПРАВЛЯЮЩИЕ ФУНКЦИИ И СТАТИСТИКА
+; ==============================================================================
+LoadStats() {
+    global LogFile, StatArrests, StatFines, StatID, StatMiranda, StatFinesSum, StatTotal
+    StatArrests := StatFines := StatID := StatMiranda := StatFinesSum := StatTotal := 0
+    if !FileExist(LogFile)
+        return
+    today := FormatTime(, "dd.MM.yyyy")
+    prefix := "[" . today
+    Loop Read LogFile
+    {
+        line := A_LoopReadLine
+        if (SubStr(line, 1, StrLen(prefix)) != prefix)
+            continue
+        StatTotal++
+        if RegExMatch(line, "Штраф.*\((\d+)\)", &m) {
+            StatFines++
+            StatFinesSum += Integer(m[1])
+        }
+        if InStr(line, "Арест")
+            StatArrests++
+        else if InStr(line, "удостоверение")
+            StatID++
+        else if InStr(line, "Миранды")
+            StatMiranda++
+    }
+}
+
+TogglePause(*) {
+    global HotkeysPaused
+    HotkeysPaused := !HotkeysPaused
+    if (HotkeysPaused) {
+        ShowTip("Хоткеи на паузе")
+        A_IconTip := "CPD — ПАУЗА"
+    } else {
+        ShowTip("Хоткеи активны")
+        A_IconTip := "CPD — Активен"
+    }
+}
+
+UpdateDeptSign() {
+    global Department, SignPTO, SignIRC, SignNUD, SignRTU, SignCPO, DeptSign
+    if (Department == "PTO")
+        DeptSign := SignPTO
+    else if (Department == "IRC")
+        DeptSign := SignIRC
+    else if (Department == "NUD")
+        DeptSign := SignNUD
+    else if (Department == "RTU")
+        DeptSign := SignRTU
+    else if (Department == "CPO")
+        DeptSign := SignCPO
+    else
+        DeptSign := "-"
+}
+
+BackupProfile() {
+    global ProfileFile, SettingsFile, FinesFile, CodesFile, BackupFolder
+    if !FileExist(ProfileFile)
+        return
+    ts := FormatTime(, "yyyyMMdd_HHmmss")
+    try FileCopy(ProfileFile, BackupFolder . "\profile_" . ts . ".bak", 1)
+    if FileExist(SettingsFile)
+        try FileCopy(SettingsFile, BackupFolder . "\settings_" . ts . ".bak", 1)
+    if FileExist(FinesFile)
+        try FileCopy(FinesFile, BackupFolder . "\fines_" . ts . ".bak", 1)
+    if FileExist(CodesFile)
+        try FileCopy(CodesFile, BackupFolder . "\codes_" . ts . ".bak", 1)
+    cutoffStr := FormatTime(DateAdd(A_Now, -30, "Days"), "yyyyMMdd")
+    Loop Files BackupFolder . "\*.bak"
+    {
+        if RegExMatch(A_LoopFileName, "(\d{8})", &m) && (m[1] < cutoffStr)
+            try FileDelete(A_LoopFileFullPath)
+    }
+}
+
+ShowInitialSetup() {
+    InitGui := Gui("+AlwaysOnTop", "Введите информацию")
+    InitGui.BackColor := "0x1A1A1A"
+    InitGui.SetFont("s12 cWhite", "Roboto")
+    InitGui.AddText("x20 y20 w180 h30", "Имя и Фамилия:")
+    editName := InitGui.AddEdit("x210 y17 w250 h28 Background202020 cWhite")
+    InitGui.AddText("x20 y65 w180 h30", "Пол:")
+    ddlPol := InitGui.AddDropDownList("x210 y62 w250 Background202020 cWhite", ["Мужской", "Женский"])
+    InitGui.AddText("x20 y110 w180 h30", "Должность:")
+    ddlPos := InitGui.AddDropDownList("x210 y107 w250 Background202020 cWhite", ["Рядовой", "Сержант", "Лейтенант", "Ст.Лейтенант", "Спецназ", "Нач.Спецназа", "Полковник", "Шериф"])
+    InitGui.AddText("x20 y155 w180 h30", "Отдел:")
+    ddlDept := InitGui.AddDropDownList("x210 y152 w250 Background202020 cWhite", ["-", "IRC", "PTO", "RTU", "NUD", "CPO"])
+    InitGui.AddText("x20 y200 w180 h30", "Должность в отд.:")
+    ddlRole := InitGui.AddDropDownList("x210 y197 w250 Background202020 cWhite", ["-", "Начальник", "Заместитель", "Сотрудник", "Стажер"])
+    InitGui.AddText("x20 y245 w180 h30", "Номер жетона:")
+    editBadge := InitGui.AddEdit("x210 y242 w250 h28 Limit5 Background202020 cWhite")
+    InitGui.SetFont("s10 cWhite", "Roboto")
+    InitGui.AddButton("x165 y295 w150 h35", "Подтвердить").OnEvent("Click", (btn, *) => MakeChoice(InitGui, editName, ddlPol, ddlPos, ddlDept, ddlRole, editBadge))
+    InitGui.Show("w490 h350")
+}
+
+MakeChoice(gui, eName, dPol, dPos, dDept, dRole, eBadge) {
+    global ProfileFile, DataFolder
+    name := eName.Value
+    pol := dPol.Text, pos := dPos.Text, dept := dDept.Text, role := dRole.Text, badge := eBadge.Value
+    if (!RegExMatch(name, "^[а-яА-ЯёЁ\s-]+$")) {
+        MsgBox("Имя только русскими буквами", "Ошибка", "Icon!")
+        return
+    }
+    if (!RegExMatch(badge, "^\d{5}$")) {
+        MsgBox("Жетон ровно 5 цифр", "Ошибка", "Icon!")
+        return
+    }
+    if (pol == "" || pos == "" || dept == "" || role == "") {
+        MsgBox("Заполните все поля", "Ошибка", "Icon!")
+        return
+    }
+    name := StrReplace(name, "|", " ")
+    name := StrReplace(name, "`n", " ")
+    name := StrReplace(name, "`r", " ")
+    tmpPath := DataFolder . "\DontDeleteCPD.tmp"
+    try FileDelete(tmpPath)
+    FileAppend(name . "|" . pol . "|" . pos . "|" . dept . "|" . role . "|" . badge . "|RIVV|ToriFoster|LNR|DREX|GZE|GZE", tmpPath, "UTF-8")
+    FileMove(tmpPath, ProfileFile, 1)
+    Reload()
+}
+
+; ==============================================================================
+; 10. ИНИЦИАЛИЗАЦИЯ И ХОТКЕИ
+; ==============================================================================
+TraySetIcon("shell32.dll", 44)
+A_TrayMenu.Add("Меню (F10)", ToggleMenu)
+A_TrayMenu.Add("Пауза (F9)", TogglePause)
+A_TrayMenu.Add()
+A_TrayMenu.Add("Выход", (*) => ExitApp())
+A_TrayMenu.Default := "Меню (F10)"
+
+Hotkey("F9", TogglePause)
+Hotkey("F10", ToggleMenu)
+
+ToggleMenu(*) {
+    global MenuObj
+    if IsObject(MenuObj) && WinExist("ahk_id " . MenuObj.Hwnd) {
+        if DllCall("IsWindowVisible", "Ptr", MenuObj.Hwnd)
+            MenuObj.Hide()
+        else
+            MenuObj.Show()
+    } else {
+        CreateMenu()
+    }
+}
+
+Handlers := Map(
+    "ID",          DoID,
+    "Arrest",      DoArrest,
+    "FineP",       DoFineMenu,
+    "DNA",         DoDNA,
+    "Miranda",     (*) => RunRPAction("Miranda"),
+    "Search",      (*) => ShowActionInput("Search"),
+    "Photo",       (*) => ShowActionInput("PhotoFingerprint"),
+    "FineC",       (*) => RunRPAction("FineCar"),
+    "Mega",        (*) => RunRPAction("Mega"),
+    "Glass",       (*) => RunRPAction("Glass"),
+    "PutCar",      (*) => RunRPAction("PutCar"),
+    "OutCar",      (*) => RunRPAction("OutCar"),
+    "HandcuffOn",  (*) => RunRPAction("HandcuffOn"),
+    "HandcuffOff", (*) => RunRPAction("HandcuffOff"),
+    "Perimeter",   (*) => RunRPAction("Perimeter"),
+    "Seize",       (*) => RunRPAction("Seize"),
+    "Fingerprint", (*) => ShowActionInput("PhotoFingerprint"),
+    "Wanted",      (*) => ShowActionInput("Wanted"),
+    "Raid",        (*) => ShowActionInput("Raid")
+)
+
+if !IsSet(Hk)
+    Hk := Map()
+
+failedHotkeys := []
+for key, handler in Handlers {
+    hkVal := Hk.Has(key) ? Hk[key] : ""
+    if (hkVal == "" || IsReservedKey(hkVal))
+        continue
+    try {
+        Hotkey(hkVal, handler)
+    } catch as e {
+        failedHotkeys.Push(key . " (" . hkVal . ")")
+    }
+}
+if (failedHotkeys.Length > 0) {
+    logLine := "[" . FormatTime(, "dd.MM.yyyy HH:mm:ss") . "] Не удалось зарегистрировать хоткеи: "
+    sep := ""
+    for v in failedHotkeys {
+        logLine .= sep . v
+        sep := ", "
+    }
+    FileAppend(logLine . "`n", LogFile, "UTF-8")
+    TrayTip(
+        "Не зарегистрировано хоткеев: " . failedHotkeys.Length
+        . "`nПодробнее: " . LogFile,
+        "CPD — Внимание", 0x2)
+}
+
+if !FileExist(CodesFile)
+    CreateDefaultCodes()
+
+if FileExist(ProfileFile) {
+    data := FileRead(ProfileFile, "UTF-8")
+    info := StrSplit(data, "|")
+    if (info.Length < 6) {
+        MsgBox("Файл профиля повреждён. Удалите CPD_Data\DontDeleteCPD.txt и перезапустите.", "CPD", "Icon!")
+        ExitApp()
+    }
+    Name        := info[1]
+    Pol         := info[2]
+    Position    := info[3]
+    Department  := info[4]
+    DeptRole    := info[5]
+    Badge       := info[6]
+    SignPTO     := info.Has(7)  ? info[7]  : "RIVV"
+    SignIRC     := info.Has(8)  ? info[8]  : "ToriFoster"
+    SignNUD     := info.Has(9)  ? info[9]  : "LNR"
+    SignRTU     := info.Has(10) ? info[10] : "DREX"
+    SignCPO     := info.Has(11) ? info[11] : "GZE"
+    SignSheriff := info.Has(12) ? info[12] : "GZE"
+    UpdateDeptSign()
+    BackupProfile()
+    BuildRPActions()
+} else {
+    ShowInitialSetup()
+}
+; ==============================================================================
+; CPD AHK v2 — ЧАСТЬ 2 / 2 (v2.3 WebView2 — недостающие функции)
+; ==============================================================================
+
+; ------------------------------------------------------------------------------
+; Утилиты
+; ------------------------------------------------------------------------------
+EscapeJSForScript(s) {
+    s := StrReplace(s, "\", "\\")
+    s := StrReplace(s, "'", "\'")
+    s := StrReplace(s, "`r`n", "\n")
+    s := StrReplace(s, "`n", "\n")
+    s := StrReplace(s, "`r", "")
+    s := StrReplace(s, "`t", "\t")
+    return s
+}
+
+ExtractMsgPayload(msg) {
+    if !IsObject(msg)
+        return ""
+    try {
+        if (Type(msg) == "Map") {
+            if msg.Has("data")
+                return msg["data"]
+            return msg
+        }
+    }
+    try return msg.data
+    return msg
+}
+
+GetDataField(obj, key, default := "") {
+    if !IsObject(obj)
+        return default
+    try {
+        if (Type(obj) == "Map") {
+            if obj.Has(key) {
+                v := obj[key]
+                return (v == "") ? default : v
+            }
+            return default
+        }
+    }
+    try {
+        v := obj.%key%
+        return (v == "") ? default : v
+    }
+    return default
+}
+
+ExtractHotkeyKey(msg) {
+    if !IsObject(msg)
+        return String(msg)
+    if (Type(msg) == "Map") {
+        if msg.Has("data") {
+            d := msg["data"]
+            return IsObject(d) ? "" : String(d)
+        }
+        return ""
+    }
+    try return String(msg.data)
+    return ""
+}
+
+; ------------------------------------------------------------------------------
+; Тёмный заголовок + drag-anywhere
+; ------------------------------------------------------------------------------
+SetDarkMode(hwnd) {
+    ; DWMWA_USE_IMMERSIVE_DARK_MODE: 20 = Win10 2004+/Win11, 19 = Win10 pre-2004
+    try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "Int", 20, "Int*", 1, "Int", 4)
+    try DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "Int", 19, "Int*", 1, "Int", 4)
+}
+
+WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
+    global MenuObj
+    if !IsObject(MenuObj)
+        return
+    if (hwnd != MenuObj.Hwnd)
+        return
+    PostMessage(0xA1, 2, 0, , "ahk_id " . hwnd)
+}
+
+; ------------------------------------------------------------------------------
+; Скрытие / показ интерфейса
+; ------------------------------------------------------------------------------
+HideWindow(*) {
+    global MenuObj, isHiddenUI, TransLevel
+    if !IsObject(MenuObj) || !WinExist("ahk_id " . MenuObj.Hwnd)
+        return
+    isHiddenUI := !isHiddenUI
+    if isHiddenUI {
+        js := ""
+        js .= "document.querySelectorAll('.nav-btn').forEach(b => b.style.display = 'none');"
+        js .= "document.querySelectorAll('.tab-content').forEach(t => { if (t.id !== 'tab1') t.style.display = 'none'; });"
+        js .= "var t1 = document.getElementById('tab1');"
+        js .= "if (t1) { t1.style.top = '15px'; t1.style.display = 'block'; t1.classList.add('active'); }"
+        js .= "var btn = document.getElementById('btnHide');"
+        js .= "if (btn) btn.textContent = 'Показать интерфейс';"
+        MenuObj.ExecuteScript(js)
+        try WinSetTransparent(TransLevel, "ahk_id " . MenuObj.Hwnd)
+    } else {
+        js := ""
+        js .= "document.querySelectorAll('.nav-btn').forEach(b => b.style.display = '');"
+        js .= "document.querySelectorAll('.tab-content').forEach(t => { if (t.id !== 'tab1') t.style.display = ''; });"
+        js .= "var t1 = document.getElementById('tab1');"
+        js .= "if (t1) { t1.style.top = '80px'; t1.style.display = ''; }"
+        js .= "var btn = document.getElementById('btnHide');"
+        js .= "if (btn) btn.textContent = 'Скрыть интерфейс';"
+        MenuObj.ExecuteScript(js)
+        try WinSetTransparent("Off", "ahk_id " . MenuObj.Hwnd)
+    }
+}
+; ------------------------------------------------------------------------------
+; Открыть лог / база арестов
+; ------------------------------------------------------------------------------
+OpenLogFromUI(*) {
+    global LogFile
+    if FileExist(LogFile) {
+        try Run(LogFile)
+    } else {
+        ShowTip("Лог-файл ещё не создан")
+    }
+}
+
+ViewArrestsGUI(*) {
+    global ArrestsFile
+    if !FileExist(ArrestsFile) {
+        ShowTip("База арестов пуста")
+        return
+    }
+    content := ""
+    try content := FileRead(ArrestsFile, "UTF-8")
+    g := Gui("+AlwaysOnTop +Resize", "База арестов")
+    g.BackColor := "0x1A1A1A"
+    g.SetFont("s10 cWhite", "Consolas")
+    g.AddEdit("x10 y10 w780 h520 ReadOnly Background000000 cWhite VScroll", content)
+    g.SetFont("s10 cWhite", "Segoe UI")
+    g.AddButton("x350 y545 w120 h32", "Закрыть").OnEvent("Click", (*) => g.Destroy())
+    g.Show("w800 h590")
+}
+
+; ------------------------------------------------------------------------------
+; Сохранение профиля из WebView
+; ------------------------------------------------------------------------------
+ProcessWebProfile(msg) {
+    global ProfileFile, Name, Badge, Pol, Position, Department, DeptRole
+    global SignPTO, SignIRC, SignNUD, SignRTU, SignCPO, SignSheriff
+
+    data := ExtractMsgPayload(msg)
+    if !IsObject(data) {
+        ShowTip("Не удалось прочитать профиль")
+        return
+    }
+
+    name  := Trim(GetDataField(data, "profName"))
+    badge := Trim(GetDataField(data, "profBadge"))
+    pol   := Trim(GetDataField(data, "profPol"))
+    pos   := Trim(GetDataField(data, "profPos"))
+    dept  := Trim(GetDataField(data, "profDept"))
+    role  := Trim(GetDataField(data, "profRole"))
+    sPTO  := Trim(GetDataField(data, "signPTO",    "RIVV"))
+    sIRC  := Trim(GetDataField(data, "signIRC",    "ToriFoster"))
+    sNUD  := Trim(GetDataField(data, "signNUD",    "LNR"))
+    sRTU  := Trim(GetDataField(data, "signRTU",    "DREX"))
+    sCPO  := Trim(GetDataField(data, "signCPO",    "GZE"))
+    sSher := Trim(GetDataField(data, "signSheriff","GZE"))
+
+    if (!RegExMatch(name, "^[а-яА-ЯёЁA-Za-z\s-]+$")) {
+        ShowTip("Имя: только буквы, пробелы и дефис")
+        return
+    }
+    if (!RegExMatch(badge, "^\d{5}$")) {
+        ShowTip("Жетон: ровно 5 цифр")
+        return
+    }
+    if (pol == "" || pos == "" || dept == "" || role == "") {
+        ShowTip("Заполните все поля")
+        return
+    }
+
+    name := StrReplace(name, "|", " ")
+    name := StrReplace(name, "`n", " ")
+    name := StrReplace(name, "`r", " ")
+
+    line := name . "|" . pol . "|" . pos . "|" . dept . "|" . role . "|" . badge
+        . "|" . sPTO . "|" . sIRC . "|" . sNUD . "|" . sRTU . "|" . sCPO . "|" . sSher
+
+    try {
+        try FileDelete(ProfileFile)
+        FileAppend(line, ProfileFile, "UTF-8")
+    } catch as e {
+        ShowTip("Не удалось сохранить: " . e.Message)
+        return
+    }
+
+    Name := name
+    Pol := pol
+    Position := pos
+    Department := dept
+    DeptRole := role
+    Badge := badge
+    SignPTO := sPTO
+    SignIRC := sIRC
+    SignNUD := sNUD
+    SignRTU := sRTU
+    SignCPO := sCPO
+    SignSheriff := sSher
+    UpdateDeptSign()
+
+    ShowTip("Профиль сохранён")
+}
+
+; ------------------------------------------------------------------------------
+; Сохранение настроек из WebView
+; ------------------------------------------------------------------------------
+ProcessWebSettings(msg) {
+    global SettingsFile, ChatOpenDelay, ChatSendDelay, TransLevel, MinecraftOnly
+    global DiscordWebhook, ForumWebhook
+
+    data := ExtractMsgPayload(msg)
+    if !IsObject(data) {
+        ShowTip("Не удалось прочитать настройки")
+        return
+    }
+
+    openDelay := 250
+    sendDelay := 250
+    trans     := 150
+    try openDelay := Integer(Trim(GetDataField(data, "setOpen", "250")))
+    try sendDelay := Integer(Trim(GetDataField(data, "setSend", "250")))
+    try trans     := Integer(Trim(GetDataField(data, "setTrans", "150")))
+
+    mcRaw   := Trim(GetDataField(data, "setMCOnly", "false"))
+    discord := Trim(GetDataField(data, "setDiscord", " "))
+    forum   := Trim(GetDataField(data, "setForum", " "))
+
+    if (openDelay < 100 || openDelay > 5000) openDelay := 250
+    if (sendDelay < 100 || sendDelay > 5000) sendDelay := 250
+    if (trans < 50 || trans > 255) trans := 150
+
+    mcVal := (mcRaw = "true" || mcRaw = "True" || mcRaw = "1" || mcRaw = "on") ? 1 : 0
+
+    ChatOpenDelay := openDelay
+    ChatSendDelay := sendDelay
+    TransLevel    := trans
+    MinecraftOnly := mcVal
+    DiscordWebhook := discord
+    ForumWebhook   := forum
+
+    try IniWrite(openDelay, SettingsFile, "General", "ChatOpenDelay")
+    try IniWrite(sendDelay, SettingsFile, "General", "ChatSendDelay")
+    try IniWrite(trans,     SettingsFile, "General", "TransLevel")
+    try IniWrite(mcVal,     SettingsFile, "General", "MinecraftOnly")
+    try IniWrite(discord,   SettingsFile, "General", "DiscordWebhook")
+    try IniWrite(forum,     SettingsFile, "General", "ForumWebhook")
+
+    ShowTip("Настройки сохранены")
+}
+
+; ------------------------------------------------------------------------------
+; Вкладка «Шпаргалка» и «Настройки → Хоткеи»
+; ------------------------------------------------------------------------------
+BuildHotkeysList() {
+    global MenuObj, HkOrder, HkNames, Hk
+    if !IsObject(MenuObj)
+        return
+    html := ""
+    for key in HkOrder {
+        name := HkNames.Has(key) ? HkNames[key] : key
+        human := (Hk.Has(key) && Hk[key] != "") ? GetHumanKey(Hk[key]) : "—"
+        html .= "<div class='hk-item'><span>" . name . "</span><b style='color:#8b5cf6;'>" . human . "</b></div>"
+    }
+    MenuObj.ExecuteScript("document.getElementById('hotkeys-list').innerHTML = '" . EscapeJSForScript(html) . "';")
+}
+
+BuildHotkeysSettings() {
+    global MenuObj, HkOrder, HkNames, Hk
+    if !IsObject(MenuObj)
+        return
+    html := ""
+    for key in HkOrder {
+        name := HkNames.Has(key) ? HkNames[key] : key
+        human := (Hk.Has(key) && Hk[key] != "") ? GetHumanKey(Hk[key]) : ""
+        html .= "<div class='hk-item'><span>" . name . "</span>"
+        html .= "<input type='text' id='hk_" . key . "' value='" . human . "' readonly"
+        
+        ; ВОТ ЗДЕСЬ ИСПРАВЛЕНЫ КАВЫЧКИ (вместо "" теперь `")
+        html .= " onclick=`"callAHK('CaptureHotkey','" . key . "')`" style='cursor:pointer;'></div>"
+    }
+    MenuObj.ExecuteScript("document.getElementById('hk-settings').innerHTML = '" . EscapeJSForScript(html) . "';")
+}
+
+; ------------------------------------------------------------------------------
+; Захват нового хоткея (клик по полю в настройках)
+; ------------------------------------------------------------------------------
+CaptureHotkey(msg) {
+    global MenuObj, Hk, HkNames, Handlers, SettingsFile
+
+    key := ExtractHotkeyKey(msg)
+    if (key == "" || !HkNames.Has(key))
+        return
+
+    oldVal := Hk.Has(key) ? Hk[key] : ""
+
+    ib := InputBox(
+        "Введите хоткей в синтаксисе AHK v2:`n`n"
+        . "  ! = Alt`n  ^ = Ctrl`n  + = Shift`n  # = Win`n`n"
+        . "Примеры: !f, ^1, F5, ^+a, !sc020`n`n"
+        . "Текущий: " . (oldVal == "" ? "(не задан)" : GetHumanKey(oldVal)),
+        "Хоткей — " . HkNames[key],
+        "w420 h280", oldVal)
+
+    if (ib.Result != "OK")
+        return
+    newHk := Trim(ib.Value)
+    if (newHk == "")
+        return
+
+    if IsReservedKey(newHk) {
+        ShowTip("F9/F10 зарезервированы")
+        return
+    }
+
+    for k, v in Hk {
+        if (k != key && v == newHk) {
+            ShowTip("Уже используется для: " . HkNames[k])
+            return
+        }
+    }
+
+    if (oldVal != "")
+        try Hotkey(oldVal, "Off")
+
+    try {
+        Hotkey(newHk, Handlers[key])
+        Hk[key] := newHk
+        try IniWrite(newHk, SettingsFile, "Hotkeys", key)
+
+        MenuObj.ExecuteScript("document.getElementById('hk_" . key . "').value = '"
+            . EscapeJSForScript(GetHumanKey(newHk)) . "';")
+
+        ShowTip("Обновлено: " . GetHumanKey(newHk))
+        BuildHotkeysList()
+    } catch as e {
+        ShowTip("Не удалось: " . e.Message)
+        if (oldVal != "")
+            try Hotkey(oldVal, Handlers[key])
+    }
+}
+
+; ------------------------------------------------------------------------------
+; Вкладка «Статистика»
+; ------------------------------------------------------------------------------
+RefreshStatsUI() {
+    global MenuObj, StatArrests, StatFines, StatFinesSum, StatID, StatMiranda, StatTotal
+    if !IsObject(MenuObj)
+        return
+    LoadStats()
+    html  := "Арестов сегодня: <b style='color:#8b5cf6;'>" . StatArrests . "</b><br>"
+    html  .= "Штрафов: <b style='color:#8b5cf6;'>" . StatFines . "</b> на <b>" . StatFinesSum . "</b> руб.<br>"
+    html  .= "Удостоверений: <b style='color:#8b5cf6;'>" . StatID . "</b><br>"
+    html  .= "Миранда: <b style='color:#8b5cf6;'>" . StatMiranda . "</b><br>"
+    html  .= "Всего действий: <b style='color:#8b5cf6;'>" . StatTotal . "</b>"
+    MenuObj.ExecuteScript("document.getElementById('stats-box').innerHTML = '" . EscapeJSForScript(html) . "';")
+}
