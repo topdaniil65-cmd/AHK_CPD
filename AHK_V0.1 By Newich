@@ -17,7 +17,7 @@ if IsSet(WM_LBUTTONDOWN)
 ; ==============================================================================
 ; 1. НАСТРОЙКИ, ПУТИ И АВТОЗАГРУЗКА МОДУЛЕЙ
 ; ==============================================================================
-global ScriptVersion := "1.0"
+global ScriptVersion := "0.1"
 global DataFolder   := A_ScriptDir . "\CPD_Data"
 global LibFolder    := DataFolder . "\Lib"
 global ShotFolder   := DataFolder . "\Screenshots"
